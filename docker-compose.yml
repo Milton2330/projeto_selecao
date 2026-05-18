@@ -1,0 +1,198 @@
+# =============================================================================
+# docker-compose.yml - Projeto: Seleção Brasileira por Estatísticas
+# =============================================================================
+# Sobe 4 serviços:
+#   1. postgres      → Banco de dados (metadados do Airflow + nossos jogadores)
+#   2. airflow-init  → Inicializa o banco e cria o usuário admin (roda 1x só)
+#   3. airflow-webserver → Interface gráfica (localhost:8080)
+#   4. airflow-scheduler → Motor que executa as DAGs
+#   5. streamlit     → Frontend da aplicação (localhost:8501)
+# =============================================================================
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.1
+  environment: &airflow-common-env
+    # Executor local: mais simples, não precisa de Redis/Celery
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+
+    # Conexão com o PostgreSQL (metadados do Airflow)
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+
+    # Segurança: chave de criptografia dos XComs (gere uma com: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+    AIRFLOW__CORE__FERNET_KEY: ''
+
+    # Não carrega os exemplos que vêm por padrão (deixa mais limpo)
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+
+    # DAGs ficam pausadas quando criadas (boa prática)
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+
+    # Permite acesso à API REST do Airflow
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+
+    # Variável de ambiente com a chave da API-Football (vem do arquivo .env)
+    API_FOOTBALL_KEY: ${API_FOOTBALL_KEY}
+
+    # Permite instalar pacotes extras via .env (opcional)
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+
+  volumes:
+    # Pasta das DAGs (seus pipelines ficam aqui)
+    - ./dags:/opt/airflow/dags
+
+    # Logs de execução de cada tarefa
+    - ./logs:/opt/airflow/logs
+
+    # Plugins customizados do Airflow
+    - ./plugins:/opt/airflow/plugins
+
+    # Configurações extras do Airflow
+    - ./config:/opt/airflow/config
+
+    # ⭐ Nossa lógica de negócio (POO, pipeline, etc.)
+    # Montamos o src/ dentro do Airflow para as DAGs poderem importar nossas classes
+    - ./src:/opt/airflow/src
+
+  # ID do usuário no Linux (no WSL2, rode: echo $UID para descobrir o seu)
+  user: "${AIRFLOW_UID:-50000}:0"
+
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # 1. BANCO DE DADOS POSTGRESQL
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15
+    container_name: selecao_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      # Persiste os dados mesmo que o container seja reiniciado
+      - postgres_data:/var/lib/postgresql/data
+      # Script SQL que cria nosso banco de jogadores na inicialização
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    ports:
+      # Expõe na porta 5432 para você acessar pelo DBeaver
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  # ---------------------------------------------------------------------------
+  # 2. INICIALIZAÇÃO DO AIRFLOW (roda uma vez e encerra)
+  # ---------------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    container_name: selecao_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        # Cria as pastas necessárias com as permissões corretas
+        mkdir -p /sources/logs /sources/dags /sources/plugins /sources/config
+        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins,config}
+
+        # Migra o banco de dados do Airflow (cria as tabelas internas)
+        airflow db migrate
+
+        # Cria o usuário admin para acessar a interface web
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@selecao.com \
+          --password admin
+
+        echo "✅ Airflow inicializado com sucesso!"
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+    user: "0:0"
+    volumes:
+      - .:/sources
+
+  # ---------------------------------------------------------------------------
+  # 3. INTERFACE WEB DO AIRFLOW (acesse: http://localhost:8080)
+  #    Login: admin / admin
+  # ---------------------------------------------------------------------------
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: selecao_airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # 4. AGENDADOR DO AIRFLOW (monitora e executa as DAGs)
+  # ---------------------------------------------------------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: selecao_airflow_scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # 5. FRONTEND STREAMLIT (acesse: http://localhost:8501)
+  # ---------------------------------------------------------------------------
+  streamlit:
+    build:
+      context: ./streamlit_app
+      dockerfile: Dockerfile
+    container_name: selecao_streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      # Hot-reload: qualquer mudança no código aparece sem reiniciar
+      - ./streamlit_app:/app
+      - ./src:/app/src
+    environment:
+      # Conecta ao PostgreSQL pelo nome do serviço (não localhost!)
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: selecao_brasileira
+    depends_on:
+      - postgres
+    restart: always
+
+
+# =============================================================================
+# VOLUMES PERSISTENTES
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
