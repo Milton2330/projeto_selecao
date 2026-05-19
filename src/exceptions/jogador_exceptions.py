@@ -36,26 +36,25 @@ class PosicaoInvalidaError(Exception):
 
 class MinutosInvalidosError(Exception):
     """
-    Lançada quando os minutos jogados são inválidos.
-    Não pode ser negativo nem ultrapassar o máximo de uma temporada.
+    Lançada quando os minutos jogados são negativos.
+    Null é permitido (jogador sem dados de minutos na API).
     """
-    MAXIMO_MINUTOS = 3420  # 38 jogos × 90 minutos (temporada completa Série A)
-
     def __init__(self, minutos: int):
         super().__init__(
             f"Minutos inválidos: '{minutos}'. "
-            f"Deve ser entre 0 e {self.MAXIMO_MINUTOS}."
+            f"Os minutos não podem ser negativos."
         )
         self.minutos = minutos
 
 
-class IdadeInvalidaError(Exception):
-    """
-    Lançada quando a idade do jogador está fora do intervalo esperado.
-    """
-    def __init__(self, idade: int):
+class NacionalidadeInvalidaError(Exception):
+    NACIONALIDADE_VALIDA = "Brazil"
+
+    def __init__(self, nacionalidade: str):
         super().__init__(
-            f"Idade inválida: '{idade}'. "
-            f"A idade deve ser entre 15 e 45 anos."
+            f"Nacionalidade inválida: '{nacionalidade}'. "
+            f"Apenas jogadores brasileiros são aceitos."
         )
-        self.idade = idade
+        self.nacionalidade = nacionalidade
+
+

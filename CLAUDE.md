@@ -4,6 +4,10 @@
 
 Sistema que coleta estatísticas de jogadores brasileiros (Séries A, B, C do Brasil + ligas europeias filtrando por nacionalidade "Brazil") via API-Football, calcula um **score ponderado por posição** e monta automaticamente a melhor seleção brasileira possível com base nos dados da temporada.
 
+O projeto integra dois trabalhos:
+- **Milton** — pipeline de dados com Airflow + filtragem estatística
+- **Bruno** — sistema de convocação manual com login (Admin/Usuário) + frontend Streamlit
+
 **Objetivos acadêmicos:** aprender Apache Airflow na prática + aplicar POO (programação orientada a objetos).
 
 ---
@@ -25,7 +29,7 @@ Sistema que coleta estatísticas de jogadores brasileiros (Séries A, B, C do Br
 ```
 selecao_brasileira/
 ├── dags/
-│   └── dag_selecao.py          ← DAG principal do Airflow (AINDA NÃO CRIADO)
+│   └── dag_selecao.py          ← AINDA NÃO CRIADO
 ├── src/
 │   ├── __init__.py
 │   ├── domain/
@@ -35,21 +39,24 @@ selecao_brasileira/
 │   │   └── selecao.py          ← PRÓXIMO A CRIAR
 │   ├── exceptions/
 │   │   ├── __init__.py
-│   │   └── jogador_exceptions.py  ← PRÓXIMO A CRIAR
+│   │   └── jogador_exceptions.py  ✅ criado
 │   └── pipeline/
 │       ├── __init__.py
-│       ├── extractor.py        ← consome API-Football
-│       ├── transformer.py      ← calcula score ponderado
-│       └── loader.py           ← salva no PostgreSQL
+│       ├── extractor.py        ← AINDA NÃO CRIADO
+│       ├── transformer.py      ← AINDA NÃO CRIADO
+│       └── loader.py           ← AINDA NÃO CRIADO
 ├── streamlit_app/
-│   ├── app.py                  ✅ criado
+│   ├── app.py                  ✅ criado (será reescrito integrando o front do Bruno)
 │   ├── Dockerfile              ✅ criado
 │   └── requirements.txt        ✅ criado
 ├── logs/
 ├── plugins/
 ├── config/
 ├── .env                        ✅ criado (API_FOOTBALL_KEY=<chave real aqui>)
+├── .env.example                ✅ criado
 ├── .gitignore                  ✅ criado
+├── CLAUDE.md                   ✅ criado
+├── README.md                   ✅ criado
 ├── docker-compose.yml          ✅ criado
 ├── init_db.sql                 ✅ criado
 └── requirements.txt            ✅ criado
@@ -148,44 +155,74 @@ Acesso via DBeaver: `localhost:5432`, user `airflow`, senha `airflow`.
 
 ---
 
+## Frontend — Abas do Streamlit
+
+O frontend reutiliza o código do Bruno e adiciona as abas de dados:
+
+```
+Aba 1 → Pré-lista          (Bruno — público, todos veem)
+Aba 2 → Convocados         (Bruno — só Admin)
+Aba 3 → Filtragem          (Milton — melhor XI por score estatístico)
+Aba 4 → Comparativo        (Milton — convocado Ancelotti vs sugerido pelo dado)
+Aba 5 → Gerenciar          (Bruno — só Admin, convocar/remover)
+```
+
+**Aba Filtragem:** mostra os melhores brasileiros por posição com base nas stats reais da temporada (do banco PostgreSQL). Filtros por posição, liga, minutos mínimos.
+
+**Aba Comparativo:** coloca lado a lado os 26 convocados pelo Ancelotti vs os 26 que o algoritmo escolheria. Mostra gols, assistências, minutos, nota média e score de cada um. Todos os dados vêm do banco — a API já os captura naturalmente ao buscar brasileiros nas ligas europeias.
+
+---
+
+## Projeto do Bruno — classes já existentes
+
+Localização: `selecao_brasileira_bruno/selecao_brasileira/`
+
+**Classes criadas pelo Bruno:**
+- `domain/jogador.py` — Jogador(nome, idade, posicao, clube, numero_camisa)
+- `domain/selecao.py` — Selecao com pre_lista, convocados, adicionar_a_pre_lista(), convocar()
+- `auth/usuario.py` — Usuario e Admin(login classmethod, is_admin)
+- `exceptions/exceptions.py` — AcessoNegadoError, CredenciaisInvalidasError, JogadorJaConvocadoError, etc.
+- `app.py` — Frontend Streamlit com tema verde/dourado, cards por posição, login na sidebar
+
+**O que precisamos adaptar:**
+- Expandir `Jogador` para incluir estatísticas (gols, assistências, minutos, score)
+- Integrar o `app.py` do Bruno com as abas de Filtragem e Comparativo
+- O sistema de login do Bruno (Admin/Usuário) será mantido como está — o amigo cuida dessa parte
+
+---
+
 ## Próximos passos — o que falta criar
 
 ### 1. Classes de domínio (src/domain/)
 
 #### `jogador.py` — classe principal
-Deve seguir o padrão OOP aprendido em aula (igual à classe `Paciente`):
-- `@property` com setters e validação para: `nome`, `posicao`, `minutos`
-- `@classmethod from_dict(cls, data)` — cria Jogador a partir do JSON da API
-- `@classmethod total_cadastrados(cls)` — conta instâncias criadas
-- `@staticmethod validar_posicao(posicao)` — valida se é uma das 4 posições válidas
-- `calcular_score(self, pesos)` — calcula o score ponderado com base nos pesos da posição
+Baseada na classe do Bruno, expandida com estatísticas:
+- Atributos do Bruno: `nome`, `idade`, `posicao`, `clube`, `numero_camisa`
+- Novos atributos: `gols`, `assistencias`, `minutos`, `nota_media`, `score`, `liga`, `temporada`
+- `@property` com setters e validação
+- `@classmethod from_dict(cls, data)` — cria Jogador a partir do JSON da API-Football
+- `@classmethod total_cadastrados(cls)`
+- `@staticmethod validar_posicao(posicao)`
+- `calcular_score(self, pesos)` — calcula o score ponderado
 - `__str__` e `__repr__`
-- Lança `JogadorInvalidoError` e `PosicaoInvalidaError` (de `exceptions/`)
+- Lança exceções de `exceptions/jogador_exceptions.py`
 
 #### `liga.py` — classe Liga
 - Atributos: `id`, `nome`, `pais`, `temporada`
 - `@classmethod from_dict(cls, data)`
 
 #### `selecao.py` — classe Selecao
-- Recebe lista de jogadores e pesos por posição
-- Método `montar()` → retorna dict com 1 melhor por posição
+- Baseada na classe do Bruno, adicionando suporte a scores
+- Método `montar_por_score()` → retorna melhor por posição baseado em estatísticas
 - Método `to_dataframe()` → retorna DataFrame pandas
 
-### 2. Exceções (src/exceptions/jogador_exceptions.py)
-
-```python
-class JogadorInvalidoError(Exception): ...
-class PosicaoInvalidaError(Exception): ...
-class MinutosInvalidosError(Exception): ...
-```
-
-### 3. Pipeline (src/pipeline/)
+### 2. Pipeline (src/pipeline/)
 
 - `extractor.py` — classe `Extractor`: chama API-Football, pagina resultados, retorna lista de dicts
 - `transformer.py` — classe `Transformer`: limpa nulls, normaliza métricas (MinMaxScaler), calcula score
 - `loader.py` — classe `Loader`: usa SQLAlchemy para fazer upsert na tabela `jogadores`
 
-### 4. DAG principal (dags/dag_selecao.py)
+### 3. DAG principal (dags/dag_selecao.py)
 
 Usar **estilo clássico** (PythonOperator + XCom via `ti.xcom_push/pull`) para fins didáticos:
 
@@ -220,3 +257,7 @@ Score = soma(metrica_normalizada * peso) para cada métrica
 - **DAG roda semanalmente** — para respeitar o limite de 100 req/dia da API
 - **Streamlit lê sempre do banco** — nunca chama a API diretamente
 - **LocalExecutor** — sem Redis/Celery, mais simples para aprendizado
+- **Branch strategy** — develop → feature/x (sem main intermediária)
+- **Frontend do Bruno reutilizado** — abas 1, 2 e 5 são do Bruno; abas 3 e 4 são do Milton
+- **Login feito pelo amigo** — não mexer na auth/usuario.py
+- **Comparativo usa só o banco** — API já captura convocados ao buscar brasileiros nas ligas europeias
