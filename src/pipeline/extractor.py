@@ -29,10 +29,10 @@ def verificar_cota(api_key: str) -> dict:
 
     if response.status_code == 200:
         info = response.json()["response"]["requests"]
-        print(f"📊 Requisições hoje: {info['current']}/{info['limit_day']}")
+        print(f"Requisições hoje: {info['current']}/{info['limit_day']}")
         return info
 
-    print(f"⚠️  Erro ao verificar cota: {response.status_code}")
+    print(f"Erro ao verificar cota: {response.status_code}")
     return {}
 
 
@@ -63,15 +63,15 @@ def _buscar_pagina(api_key: str, league_id: int, season: int, pagina: int) -> di
         if response.status_code == 200:
             return response.json()
 
-        print(f"⚠️  Erro na página {pagina}: status {response.status_code}")
+        print(f"Erro na página {pagina}: status {response.status_code}")
         return None
 
     except requests.exceptions.Timeout:
-        print(f"⚠️  Timeout na página {pagina} — pulando.")
+        print(f"Timeout na página {pagina} — pulando.")
         return None
 
     except requests.exceptions.RequestException as e:
-        print(f"⚠️  Erro de conexão na página {pagina}: {e}")
+        print(f"Erro de conexão na página {pagina}: {e}")
         return None
 
 
@@ -95,16 +95,16 @@ def buscar_jogadores(api_key: str, league_id: int, season: int) -> list[dict]:
             "statistics": [{ "team", "league", "games", "goals", ... }]
         }
     """
-    print(f"\n🔍 Buscando jogadores — Liga: {league_id} | Temporada: {season}")
+    print(f"\nBuscando jogadores — Liga: {league_id} | Temporada: {season}")
 
     # Primeira página para descobrir o total de páginas
     primeira = _buscar_pagina(api_key, league_id, season, pagina=1)
     if not primeira:
-        print("⚠️  Nenhum dado retornado pela API.")
+        print("Nenhum dado retornado pela API.")
         return []
 
     total_paginas = primeira["paging"]["total"]
-    print(f"📄 Total de páginas: {total_paginas}")
+    print(f"Total de páginas: {total_paginas}")
 
     # Coleta jogadores da primeira página
     jogadores = primeira.get("response", [])
@@ -120,5 +120,5 @@ def buscar_jogadores(api_key: str, league_id: int, season: int) -> list[dict]:
         # Pausa entre requisições para não sobrecarregar a API
         time.sleep(0.5)
 
-    print(f"✅ Coleta concluída: {len(jogadores)} jogadores | {total_paginas} requisições")
+    print(f"Coleta concluída: {len(jogadores)} jogadores | {total_paginas} requisições")
     return jogadores

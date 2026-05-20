@@ -85,16 +85,16 @@ with DAG(
         """
         api_key = os.environ.get("API_FOOTBALL_KEY")
         if not api_key:
-            raise ValueError("❌ API_FOOTBALL_KEY não encontrada nas variáveis de ambiente!")
+            raise ValueError("API_FOOTBALL_KEY não encontrada nas variáveis de ambiente!")
 
-        print(f"🔑 Chave carregada | Liga: {LIGA_NOME} | Temporada: {TEMPORADA}")
+        print(f"Chave carregada | Liga: {LIGA_NOME} | Temporada: {TEMPORADA}")
 
         jogadores_brutos = buscar_jogadores(api_key=api_key, league_id=LIGA_ID, season=TEMPORADA)
 
         context["ti"].xcom_push(key="jogadores_brutos",    value=jogadores_brutos)
         context["ti"].xcom_push(key="total_jogadores_api", value=len(jogadores_brutos))
 
-        print(f"📦 XCom guardado: {len(jogadores_brutos)} registros brutos")
+        print(f"XCom guardado: {len(jogadores_brutos)} registros brutos")
 
 
     # -------------------------------------------------------------------------
@@ -117,16 +117,16 @@ with DAG(
         jogadores_brutos = ti.xcom_pull(task_ids="extract_task", key="jogadores_brutos")
 
         if not jogadores_brutos:
-            raise ValueError("❌ Nenhum dado recebido da extract_task via XCom!")
+            raise ValueError("Nenhum dado recebido da extract_task via XCom!")
 
-        print(f"📥 XCom recebido: {len(jogadores_brutos)} registros brutos")
+        print(f"XCom recebido: {len(jogadores_brutos)} registros brutos")
 
         jogadores_transformados = transformar(jogadores_brutos, temporada=TEMPORADA)
 
         ti.xcom_push(key="jogadores_transformados", value=jogadores_transformados)
         ti.xcom_push(key="total_processados",       value=len(jogadores_transformados))
 
-        print(f"📦 XCom guardado: {len(jogadores_transformados)} registros transformados")
+        print(f"XCom guardado: {len(jogadores_transformados)} registros transformados")
 
 
     # -------------------------------------------------------------------------
@@ -150,9 +150,9 @@ with DAG(
         total_processados   = ti.xcom_pull(task_ids="transform_task", key="total_processados")
 
         if not jogadores:
-            raise ValueError("❌ Nenhum dado recebido da transform_task via XCom!")
+            raise ValueError("Nenhum dado recebido da transform_task via XCom!")
 
-        print(f"📥 XCom recebido: {len(jogadores)} registros prontos para o banco")
+        print(f"XCom recebido: {len(jogadores)} registros prontos para o banco")
 
         contadores = salvar_jogadores(jogadores, DB_URL)
 
@@ -168,7 +168,7 @@ with DAG(
         )
 
         print(
-            f"🏁 Pipeline {LIGA_NOME} concluído!\n"
+            f"Pipeline {LIGA_NOME} concluído!\n"
             f"   Inseridos: {contadores['inseridos']} | "
             f"   Atualizados: {contadores['atualizados']}"
         )

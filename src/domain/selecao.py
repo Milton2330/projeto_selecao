@@ -148,7 +148,7 @@ class Selecao:
             candidatos = por_posicao.get(posicao, [])
 
             if not candidatos:
-                print(f"⚠️  Nenhum jogador encontrado para a posição: {posicao}")
+                print(f"Nenhum jogador encontrado para a posição: {posicao}")
                 continue
 
             # sorted() com reverse=True = maior score primeiro

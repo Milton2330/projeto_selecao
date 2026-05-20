@@ -166,7 +166,7 @@ def filtrar_brasileiros(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame filtrado com apenas os brasileiros
     """
     df_br = df[df["nacionalidade"] == "Brazil"].copy()
-    print(f"🇧🇷  Brasileiros encontrados: {len(df_br)} de {len(df)} jogadores")
+    print(f"Brasileiros encontrados: {len(df_br)} de {len(df)} jogadores")
     return df_br
 
 
@@ -290,10 +290,10 @@ def transformar(jogadores_brutos: list[dict], temporada: int) -> list[dict]:
     Returns:
         Lista de dicts prontos para a função salvar_jogadores() do loader
     """
-    print(f"\n⚙️  Iniciando transformação de {len(jogadores_brutos)} registros brutos...")
+    print(f"\nIniciando transformação de {len(jogadores_brutos)} registros brutos...")
 
     if not jogadores_brutos:
-        print("⚠️  Lista vazia recebida.")
+        print("Lista vazia recebida.")
         return []
 
     # Passo 1: JSON aninhado → DataFrame
@@ -305,7 +305,7 @@ def transformar(jogadores_brutos: list[dict], temporada: int) -> list[dict]:
     # Passo 2: filtra brasileiros
     df = filtrar_brasileiros(df)
     if df.empty:
-        print("⚠️  Nenhum jogador brasileiro encontrado.")
+        print("Nenhum jogador brasileiro encontrado.")
         return []
 
     # Passo 3: trata nulos
@@ -314,7 +314,7 @@ def transformar(jogadores_brutos: list[dict], temporada: int) -> list[dict]:
     # Passo 4: normaliza e calcula score
     df = calcular_scores(df)
 
-    print(f"✅ Transformação concluída: {len(df)} jogadores processados")
+    print(f"Transformação concluída: {len(df)} jogadores processados")
 
     # Retorna como lista de dicts para o loader
     return df.to_dict(orient="records")

@@ -87,10 +87,10 @@ def salvar_jogadores(jogadores: list[dict], db_url: str) -> dict:
         Dict com contadores: {"inseridos": int, "atualizados": int}
     """
     if not jogadores:
-        print("⚠️  Nenhum jogador para salvar.")
+        print("Nenhum jogador para salvar.")
         return {"inseridos": 0, "atualizados": 0}
 
-    print(f"\n💾 Salvando {len(jogadores)} jogadores no banco...")
+    print(f"\nSalvando {len(jogadores)} jogadores no banco...")
 
     engine = create_engine(db_url)
 
@@ -133,7 +133,7 @@ def salvar_jogadores(jogadores: list[dict], db_url: str) -> dict:
             else:
                 atualizados += 1
 
-    print(f"✅ Banco atualizado: {inseridos} inseridos | {atualizados} atualizados")
+    print(f"Banco atualizado: {inseridos} inseridos | {atualizados} atualizados")
     return {"inseridos": inseridos, "atualizados": atualizados}
 
 
@@ -193,4 +193,4 @@ def registrar_log(
             "concluido_em":         datetime.utcnow(),
         })
 
-    print(f"📋 Log registrado: {status} | {jogadores_filtrados} jogadores | {requisicoes_api} req")
+    print(f"Log registrado: {status} | {jogadores_filtrados} jogadores | {requisicoes_api} req")

@@ -34,7 +34,7 @@ from exceptions.selecao_exceptions import (
 
 st.set_page_config(
     page_title="Seleção Brasileira 2026",
-    page_icon="🇧🇷",
+    page_icon="",
     layout="wide",
 )
 
@@ -303,7 +303,7 @@ def exibir_msg():
     if st.session_state.msg:
         tipo, texto = st.session_state.msg
         css   = "msg-ok" if tipo == "ok" else "msg-erro"
-        icone = "✔" if tipo == "ok" else "✖"
+        icone = "" if tipo == "ok" else ""
         st.markdown(f'<div class="{css}">{icone} {texto}</div>', unsafe_allow_html=True)
         st.session_state.msg = None
 
@@ -324,7 +324,7 @@ def agrupar_por_posicao(jogadores: list) -> dict:
 
 st.markdown("""
 <div class="hero">
-    <h1>🇧🇷 SELEÇÃO BRASILEIRA 2026</h1>
+    <h1>SELEÇÃO BRASILEIRA 2026</h1>
     <p>Sistema de Convocação · Copa do Mundo · Técnico: Carlo Ancelotti</p>
 </div>
 """, unsafe_allow_html=True)
@@ -353,7 +353,7 @@ with st.sidebar:
                 st.session_state.msg = ("erro", "Usuário ou senha incorretos.")
                 st.rerun()
     else:
-        st.success("✔ Admin")
+        st.success("Admin")
         st.markdown("**Modo Admin ativo**")
         if st.button("SAIR"):
             st.session_state.admin_logado = False
@@ -412,7 +412,7 @@ with tabs[0]:
     for pos, jogs in grupos.items():
         st.markdown(f'<div class="section-title">{pos.upper()}S</div>', unsafe_allow_html=True)
         for j in sorted(jogs, key=lambda x: x.numero_camisa or 99):
-            card_jogador(j, "CONVOCADO ✔" if j.nome in conv_nomes else "")
+            card_jogador(j, "CONVOCADO " if j.nome in conv_nomes else "")
 
 
 # -----------------------------------------------------------------------------
@@ -421,7 +421,7 @@ with tabs[0]:
 
 with tabs[1]:
     if not admin_logado:
-        st.markdown('<div class="msg-erro">🔒 Área restrita — faça login como Admin para visualizar os convocados.</div>',
+        st.markdown('<div class="msg-erro">Área restrita — faça login como Admin para visualizar os convocados.</div>',
                     unsafe_allow_html=True)
     else:
         st.markdown('<div class="section-title">CONVOCADOS OFICIAIS · ANCELOTTI · 18/05/2026</div>',
@@ -460,7 +460,7 @@ with tabs[2]:
     df = carregar_jogadores_db(posicao_filtro, liga_filtro, min_min)
 
     if df.empty:
-        st.markdown('<div class="sem-dados">📭 Nenhum dado encontrado.<br><small>O pipeline ainda não rodou ou não há jogadores com esses filtros.</small></div>',
+        st.markdown('<div class="sem-dados">Nenhum dado encontrado.<br><small>O pipeline ainda não rodou ou não há jogadores com esses filtros.</small></div>',
                     unsafe_allow_html=True)
     else:
         m1, m2, m3, m4 = st.columns(4)
@@ -503,7 +503,7 @@ with tabs[3]:
     col_anc, col_alg = st.columns(2)
 
     with col_anc:
-        st.markdown("### 👨‍💼 Ancelotti")
+        st.markdown("### Ancelotti")
         st.caption("Convocados oficiais — 18/05/2026")
         grupos = agrupar_por_posicao(selecao.convocados)
         for pos, jogs in grupos.items():
@@ -512,11 +512,11 @@ with tabs[3]:
                 st.markdown(f"- {j.nome} · *{j.clube}*")
 
     with col_alg:
-        st.markdown("### 🤖 Algoritmo")
+        st.markdown("### Algoritmo")
         st.caption("Melhor XI — Séries A, B e C")
 
         if df_algo.empty:
-            st.markdown('<div class="sem-dados">📭 Sem dados no banco ainda.<br><small>Execute as DAGs de coleta primeiro.</small></div>',
+            st.markdown('<div class="sem-dados">Sem dados no banco ainda.<br><small>Execute as DAGs de coleta primeiro.</small></div>',
                         unsafe_allow_html=True)
         else:
             formacao  = {"Goalkeeper": 1, "Defender": 4, "Midfielder": 3, "Attacker": 3}
@@ -558,7 +558,7 @@ if admin_logado:
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("#### ➕ Convocar jogador")
+            st.markdown("#### Convocar jogador")
             disponiveis = [n for n in pre_nomes if n not in conv_nomes_set]
             if disponiveis:
                 escolha_conv = st.selectbox("Selecione da pré-lista", disponiveis, key="sel_conv")
@@ -574,7 +574,7 @@ if admin_logado:
                 st.info("Todos os jogadores já foram convocados.")
 
         with col2:
-            st.markdown("#### ➖ Remover convocação")
+            st.markdown("#### Remover convocação")
             conv_nomes_lista = [j.nome for j in selecao.convocados]
             if conv_nomes_lista:
                 escolha_rem = st.selectbox("Selecione dos convocados", conv_nomes_lista, key="sel_rem")

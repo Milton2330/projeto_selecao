@@ -108,7 +108,7 @@ with DAG(
             # Converte cada linha para um dict simples
             jogadores = [dict(row._mapping) for row in resultado]
 
-        print(f"📥 {len(jogadores)} jogadores carregados do banco "
+        print(f"{len(jogadores)} jogadores carregados do banco "
               f"(mínimo {MINUTOS_MINIMOS} minutos jogados)")
 
         # Salva no XCom para a próxima task
@@ -138,7 +138,7 @@ with DAG(
         jogadores_db  = ti.xcom_pull(task_ids="buscar_jogadores_task", key="jogadores_db")
 
         if not jogadores_db:
-            raise ValueError("❌ Nenhum jogador recebido do banco. "
+            raise ValueError("Nenhum jogador recebido do banco. "
                              "As DAGs de coleta já rodaram?")
 
         # Converte dicts → objetos Jogador
@@ -161,17 +161,17 @@ with DAG(
                 jogadores.append(j)
             except Exception as e:
                 # Se um jogador tiver dado inválido, pula e continua
-                print(f"⚠️  Pulando {row.get('nome', '?')}: {e}")
+                print(f"Pulando {row.get('nome', '?')}: {e}")
 
-        print(f"✅ {len(jogadores)} objetos Jogador criados\n")
+        print(f"{len(jogadores)} objetos Jogador criados\n")
 
         # Monta o XI
         selecao = Selecao()
-        print("🏆 Melhor XI por score estatístico:\n")
+        print("Melhor XI por score estatístico:\n")
         xi = selecao.montar_por_score(jogadores)
 
         if len(xi) < 11:
-            print(f"⚠️  Atenção: XI incompleto — apenas {len(xi)} jogadores selecionados. "
+            print(f"Atenção: XI incompleto — apenas {len(xi)} jogadores selecionados. "
                   f"Pode faltar dados de alguma posição.")
 
         # Converte de volta para dicts (Jogador não é serializável no XCom)
@@ -188,7 +188,7 @@ with DAG(
         ]
 
         ti.xcom_push(key="xi_selecionado", value=xi_dicts)
-        print(f"\n📦 XI guardado no XCom: {len(xi_dicts)} jogadores")
+        print(f"\nXI guardado no XCom: {len(xi_dicts)} jogadores")
 
 
     # -------------------------------------------------------------------------
@@ -212,7 +212,7 @@ with DAG(
         xi  = ti.xcom_pull(task_ids="montar_selecao_task", key="xi_selecionado")
 
         if not xi:
-            raise ValueError("❌ XI vazio recebido da montar_selecao_task.")
+            raise ValueError("XI vazio recebido da montar_selecao_task.")
 
         engine = create_engine(DB_URL)
 
@@ -220,7 +220,7 @@ with DAG(
 
             # Limpa a seleção anterior (tabela é sempre um snapshot atual)
             conn.execute(text("DELETE FROM selecao_atual"))
-            print("🗑️  Seleção anterior removida")
+            print("Seleção anterior removida")
 
             salvos = 0
             for jogador in xi:
@@ -238,7 +238,7 @@ with DAG(
                 row = resultado.fetchone()
 
                 if not row:
-                    print(f"⚠️  Jogador '{jogador['nome']}' não encontrado na tabela jogadores.")
+                    print(f"Jogador '{jogador['nome']}' não encontrado na tabela jogadores.")
                     continue
 
                 conn.execute(text("""
@@ -254,9 +254,9 @@ with DAG(
                 })
 
                 salvos += 1
-                print(f"  ✅ {jogador['posicao']:12s} → {jogador['nome']} (score: {jogador['score']:.4f})")
+                print(f"  {jogador['posicao']:12s} → {jogador['nome']} (score: {jogador['score']:.4f})")
 
-        print(f"\n🏁 dag_convocar concluída! {salvos} jogadores salvos na tabela selecao_atual.")
+        print(f"\ndag_convocar concluída! {salvos} jogadores salvos na tabela selecao_atual.")
 
 
     # -------------------------------------------------------------------------
