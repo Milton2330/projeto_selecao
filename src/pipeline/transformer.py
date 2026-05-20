@@ -1,15 +1,6 @@
 # =============================================================================
 # transformer.py - Transformação e cálculo de score
 # =============================================================================
-# Funções para limpar, filtrar e calcular o score dos jogadores.
-#
-# Fluxo:
-#   1. achatar()              → JSON aninhado da API → DataFrame pandas
-#   2. filtrar_brasileiros()  → mantém só nationality == "Brazil"
-#   3. tratar_nulos()         → fillna(0) nas colunas numéricas
-#   4. calcular_scores()      → MinMaxScaler por posição + score ponderado
-#   5. transformar()          → função principal que encadeia os 4 passos
-# =============================================================================
 
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
@@ -22,54 +13,52 @@ from sklearn.preprocessing import MinMaxScaler
 # =============================================================================
 
 PESOS = {
+    # nota_media foi removida — os pesos foram redistribuídos proporcionalmente
+    # entre as métricas restantes para continuar somando 1.0.
+    # Esses pesos só são usados quando o jogador NÃO tem nota_media da API.
     "Goalkeeper": {
         "gols":         0.0,
         "assistencias": 0.0,
-        "minutos":      0.3,
-        "nota_media":   0.4,
+        "minutos":      0.5,   # era 0.3 → redistribuído o peso do rating (0.4)
         "passes_chave": 0.0,
         "desarmes":     0.0,
-        "defesas":      0.3,
+        "defesas":      0.5,   # era 0.3 → redistribuído o peso do rating (0.4)
     },
     "Defender": {
-        "gols":         0.1,
-        "assistencias": 0.1,
-        "minutos":      0.2,
-        "nota_media":   0.3,
-        "passes_chave": 0.05,
-        "desarmes":     0.25,
+        "gols":         0.15,  # era 0.1
+        "assistencias": 0.15,  # era 0.1
+        "minutos":      0.25,  # era 0.2
+        "passes_chave": 0.1,   # era 0.05
+        "desarmes":     0.35,  # era 0.25
         "defesas":      0.0,
     },
     "Midfielder": {
-        "gols":         0.2,
-        "assistencias": 0.25,
-        "minutos":      0.2,
-        "nota_media":   0.2,
-        "passes_chave": 0.15,
+        "gols":         0.25,  # era 0.2
+        "assistencias": 0.30,  # era 0.25
+        "minutos":      0.25,  # era 0.2
+        "passes_chave": 0.20,  # era 0.15
         "desarmes":     0.0,
         "defesas":      0.0,
     },
     "Attacker": {
-        "gols":         0.35,
-        "assistencias": 0.2,
-        "minutos":      0.2,
-        "nota_media":   0.15,
-        "passes_chave": 0.1,
+        "gols":         0.40,  # era 0.35
+        "assistencias": 0.25,  # era 0.2
+        "minutos":      0.20,  # era 0.2
+        "passes_chave": 0.15,  # era 0.1
         "desarmes":     0.0,
         "defesas":      0.0,
     },
 }
 
-# Colunas que entram no cálculo de score
-METRICAS = ["gols", "assistencias", "minutos", "nota_media",
-            "passes_chave", "desarmes", "defesas"]
+# Colunas que entram no cálculo de score (nota_media removida — vira o score diretamente)
+METRICAS = ["gols", "assistencias", "minutos", "passes_chave", "desarmes", "defesas"]
 
 
 # =============================================================================
-# PASSO 1 — achatar o JSON aninhado → DataFrame
+# PASSO 1 — JSON_to_DataFrame o JSON aninhado → DataFrame
 # =============================================================================
 
-def achatar(jogadores_brutos: list[dict]) -> pd.DataFrame:
+def JSON_to_DataFrame(jogadores_brutos: list[dict]) -> pd.DataFrame:
     """
     Converte a lista de dicts aninhados da API em um DataFrame pandas plano.
 
@@ -188,6 +177,8 @@ def tratar_nulos(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame com as métricas preenchidas
     """
+    # nota_media é mantida como None quando ausente — usada como sinal
+    # para decidir se o score vem direto da API ou é calculado pelos pesos.
     colunas_numericas = METRICAS + [
         "aparicoes", "titular", "passes_total", "precisao_passes",
         "interceptacoes", "bloqueios", "chutes_total", "chutes_gol",
@@ -207,21 +198,24 @@ def tratar_nulos(df: pd.DataFrame) -> pd.DataFrame:
 
 def calcular_scores(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Agrupa os jogadores por posição, normaliza as métricas com MinMaxScaler
-    e calcula o score ponderado para cada um.
+    Calcula o score de cada jogador usando duas estratégias:
 
-    Por que normalizar POR POSIÇÃO?
-    Um goleiro com 0 gols não é inferior a um atacante com 10 —
-    eles jogam papéis diferentes. Cada jogador deve ser comparado
-    apenas com outros da mesma posição.
+    1. COM nota_media (rating da API disponível):
+       score = nota_media / 10
+       A nota da API já resume a qualidade do jogador. Dividimos por 10
+       para normalizar para a escala [0, 1].
 
-    MinMaxScaler transforma cada métrica para [0, 1]:
-        valor_normalizado = (x - min) / (max - min)
+    2. SEM nota_media (rating ausente):
+       Aplica MinMaxScaler nas 6 métricas restantes (por posição)
+       e calcula o score como soma ponderada pelos PESOS.
 
-    Score = soma(métrica_normalizada × peso) para cada métrica da posição.
+    Por que separar os dois grupos?
+    Jogadores sem rating geralmente tiveram poucas partidas ou a API
+    não gerou avaliação. O cálculo pelos pesos garante que eles ainda
+    entrem no ranking com base no que jogaram.
 
     Args:
-        df: DataFrame com métricas já sem nulos
+        df: DataFrame com métricas já sem nulos (exceto nota_media)
 
     Returns:
         DataFrame com a coluna "score" preenchida
@@ -232,34 +226,40 @@ def calcular_scores(df: pd.DataFrame) -> pd.DataFrame:
     for posicao, grupo in df.groupby("posicao"):
         grupo = grupo.copy()
 
-        # Posição não mapeada nos pesos → score 0
         if posicao not in PESOS:
             grupos.append(grupo)
             continue
 
-        # Com apenas 1 jogador, o scaler retorna tudo 0 (max == min)
-        # Atribuímos 0.5 como valor neutro
-        if len(grupo) == 1:
-            grupo["score"] = 0.5
-            grupos.append(grupo)
-            continue
+        # Separa jogadores com e sem nota_media da API
+        mask_com_rating = grupo["nota_media"].notna() & (grupo["nota_media"] > 0)
+        com_rating = grupo[mask_com_rating]
+        sem_rating = grupo[~mask_com_rating]
 
-        pesos = PESOS[posicao]
+        # Grupo 1: COM nota_media → score direto da API normalizado para [0, 1]
+        if not com_rating.empty:
+            grupo.loc[com_rating.index, "score"] = (
+                com_rating["nota_media"] / 10
+            ).round(4)
 
-        # Normaliza as métricas deste grupo para [0, 1]
-        scaler     = MinMaxScaler()
-        metricas_df = grupo[METRICAS].astype(float)
-        normalizado = pd.DataFrame(
-            scaler.fit_transform(metricas_df),
-            columns=METRICAS,
-            index=grupo.index,
-        )
-
-        # Score = soma ponderada das métricas normalizadas
-        grupo["score"] = sum(
-            normalizado[metrica] * pesos[metrica]
-            for metrica in METRICAS
-        ).round(4)
+        # Grupo 2: SEM nota_media → MinMaxScaler + pesos nas 6 métricas
+        if not sem_rating.empty:
+            # Com apenas 1 jogador o scaler retorna tudo 0 (max == min)
+            # Atribuímos 0.5 como valor neutro
+            if len(sem_rating) == 1:
+                grupo.loc[sem_rating.index, "score"] = 0.5
+            else:
+                pesos = PESOS[posicao]
+                scaler      = MinMaxScaler()
+                metricas_df = sem_rating[METRICAS].astype(float)
+                normalizado = pd.DataFrame(
+                    scaler.fit_transform(metricas_df),
+                    columns=METRICAS,
+                    index=sem_rating.index,
+                )
+                grupo.loc[sem_rating.index, "score"] = sum(
+                    normalizado[metrica] * pesos[metrica]
+                    for metrica in METRICAS
+                ).round(4)
 
         grupos.append(grupo)
 
@@ -278,7 +278,7 @@ def transformar(jogadores_brutos: list[dict], temporada: int) -> list[dict]:
     Executa o pipeline completo de transformação.
 
     Passos:
-        1. achatar()             → lista de dicts → DataFrame
+        1. JSON_to_DataFrame()             → lista de dicts → DataFrame
         2. filtrar_brasileiros() → mantém só nationality == "Brazil"
         3. tratar_nulos()        → fillna(0) nas colunas numéricas
         4. calcular_scores()     → MinMaxScaler por posição + score ponderado
@@ -297,7 +297,7 @@ def transformar(jogadores_brutos: list[dict], temporada: int) -> list[dict]:
         return []
 
     # Passo 1: JSON aninhado → DataFrame
-    df = achatar(jogadores_brutos)
+    df = JSON_to_DataFrame(jogadores_brutos)
 
     # Adiciona a temporada como coluna (não vem da API diretamente)
     df["temporada"] = temporada

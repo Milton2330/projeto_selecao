@@ -12,17 +12,11 @@ import time
 # URL base da API-Football
 BASE_URL = "https://v3.football.api-sports.io"
 
-
+# na real que dá pra tirar depois essa função pq ela só me mostra as minhas requisições e eu consigo saber isso somente olhando para o dashboard que tem no site
 def verificar_cota(api_key: str) -> dict:
     """
     Consulta o endpoint /status para ver quantas requisições restam no dia.
     Este endpoint é gratuito — não conta na cota diária de 100 requisições.
-
-    Args:
-        api_key: Chave da API-Football
-
-    Returns:
-        Dict com "current" (usadas hoje) e "limit_day" (limite diário)
     """
     headers  = {"x-apisports-key": api_key}
     response = requests.get(f"{BASE_URL}/status", headers=headers)
@@ -87,13 +81,6 @@ def buscar_jogadores(api_key: str, league_id: int, season: int) -> list[dict]:
         league_id: ID da liga a buscar
         season:    Temporada no formato YYYY (ex: 2025)
 
-    Returns:
-        Lista de dicionários com os dados brutos da API.
-        Cada dicionário tem a estrutura:
-        {
-            "player":     { "id", "name", "nationality", "age", ... },
-            "statistics": [{ "team", "league", "games", "goals", ... }]
-        }
     """
     print(f"\nBuscando jogadores — Liga: {league_id} | Temporada: {season}")
 

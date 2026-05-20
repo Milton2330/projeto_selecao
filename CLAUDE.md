@@ -29,24 +29,28 @@ O projeto integra dois trabalhos:
 ```
 selecao_brasileira/
 ├── dags/
-│   └── dag_selecao.py          ← AINDA NÃO CRIADO
+│   ├── dag_serie_a.py          ✅ criado (coleta Série A — segunda às 3h)
+│   ├── dag_serie_b.py          ✅ criado (coleta Série B — quarta às 3h)
+│   ├── dag_serie_c.py          ✅ criado (coleta Série C — sexta às 3h)
+│   └── dag_convocar.py         ✅ criado (monta o XI — sábado às 8h)
 ├── src/
 │   ├── __init__.py
 │   ├── domain/
 │   │   ├── __init__.py
-│   │   ├── jogador.py          ← PRÓXIMO A CRIAR
-│   │   ├── liga.py             ← PRÓXIMO A CRIAR
-│   │   └── selecao.py          ← PRÓXIMO A CRIAR
+│   │   ├── jogador.py          ✅ criado
+│   │   ├── liga.py             ✅ criado
+│   │   └── selecao.py          ✅ criado
 │   ├── exceptions/
 │   │   ├── __init__.py
-│   │   └── jogador_exceptions.py  ✅ criado
+│   │   ├── jogador_exceptions.py   ✅ criado
+│   │   └── selecao_exceptions.py   ✅ criado
 │   └── pipeline/
 │       ├── __init__.py
-│       ├── extractor.py        ← AINDA NÃO CRIADO
-│       ├── transformer.py      ← AINDA NÃO CRIADO
-│       └── loader.py           ← AINDA NÃO CRIADO
+│       ├── extractor.py        ✅ criado (procedural)
+│       ├── transformer.py      ✅ criado (procedural)
+│       └── loader.py           ✅ criado (procedural)
 ├── streamlit_app/
-│   ├── app.py                  ✅ criado (será reescrito integrando o front do Bruno)
+│   ├── app.py                  ✅ criado (integrado com front do Bruno)
 │   ├── Dockerfile              ✅ criado
 │   └── requirements.txt        ✅ criado
 ├── logs/
@@ -191,62 +195,61 @@ Localização: `selecao_brasileira_bruno/selecao_brasileira/`
 
 ---
 
-## Próximos passos — o que falta criar
+## O que já foi implementado
 
-### 1. Classes de domínio (src/domain/)
+### Pipeline (procedural — sem OOP)
 
-#### `jogador.py` — classe principal
-Baseada na classe do Bruno, expandida com estatísticas:
-- Atributos do Bruno: `nome`, `idade`, `posicao`, `clube`, `numero_camisa`
-- Novos atributos: `gols`, `assistencias`, `minutos`, `nota_media`, `score`, `liga`, `temporada`
-- `@property` com setters e validação
-- `@classmethod from_dict(cls, data)` — cria Jogador a partir do JSON da API-Football
-- `@classmethod total_cadastrados(cls)`
-- `@staticmethod validar_posicao(posicao)`
-- `calcular_score(self, pesos)` — calcula o score ponderado
-- `__str__` e `__repr__`
-- Lança exceções de `exceptions/jogador_exceptions.py`
+- `extractor.py` — três funções: `verificar_cota()` (diagnóstico manual), `_buscar_pagina()` (interna), `buscar_jogadores()` (chamada pela DAG)
+- `transformer.py` — quatro funções encadeadas por `transformar()`: `JSON_to_DataFrame()`, `filtrar_brasileiros()`, `tratar_nulos()`, `calcular_scores()`
+- `loader.py` — `_mapear()`, `salvar_jogadores()` (upsert), `registrar_log()`
 
-#### `liga.py` — classe Liga
-- Atributos: `id`, `nome`, `pais`, `temporada`
-- `@classmethod from_dict(cls, data)`
+### DAGs (uma por liga + dag_convocar)
 
-#### `selecao.py` — classe Selecao
-- Baseada na classe do Bruno, adicionando suporte a scores
-- Método `montar_por_score()` → retorna melhor por posição baseado em estatísticas
-- Método `to_dataframe()` → retorna DataFrame pandas
+- Segunda → dag_serie_a (Série A, liga_id=71)
+- Quarta → dag_serie_b (Série B, liga_id=72)
+- Sexta → dag_serie_c (Série C, liga_id=75)
+- Sábado → dag_convocar (lê banco, monta XI, salva em selecao_atual)
 
-### 2. Pipeline (src/pipeline/)
+### Domínio (OOP)
 
-- `extractor.py` — classe `Extractor`: chama API-Football, pagina resultados, retorna lista de dicts
-- `transformer.py` — classe `Transformer`: limpa nulls, normaliza métricas (MinMaxScaler), calcula score
-- `loader.py` — classe `Loader`: usa SQLAlchemy para fazer upsert na tabela `jogadores`
+- `jogador.py` — atributos com @property/setter, from_dict(), total_cadastrados(), validar_posicao(), calcular_score()
+- `liga.py` — from_dict(), constantes SERIE_A/B/C
+- `selecao.py` — mantém código do Bruno + montar_por_score() + to_dataframe()
 
-### 3. DAG principal (dags/dag_selecao.py)
+### Exceções
 
-Usar **estilo clássico** (PythonOperator + XCom via `ti.xcom_push/pull`) para fins didáticos:
+- `jogador_exceptions.py` — NomeInvalidoError, PosicaoInvalidaError, IdadeInvalidaError, NacionalidadeInvalidaError
+- `selecao_exceptions.py` — JogadorJaConvocadoError, JogadorNaoConvocadoError, JogadorNaoEncontradoError, FormacaoInvalidaError
 
-```
-extract_task >> transform_task >> load_task >> convocar_task
-```
+### Frontend
+
+- `streamlit_app/app.py` — 5 abas integradas com autenticação do Bruno
 
 ---
 
-## Pesos por posição (algoritmo de score)
+## Algoritmo de score — decisão atual
 
-Cada posição valoriza métricas diferentes. Exemplo inicial:
+O score é calculado de duas formas dependendo da disponibilidade do rating da API:
+
+**Jogadores COM `nota_media` (rating da API):**
+`score = nota_media / 10`
+A nota da API resume a qualidade geral do jogador. Dividimos por 10 para normalizar para [0, 1].
+
+**Jogadores SEM `nota_media`:**
+Aplica MinMaxScaler nas 6 métricas por posição e calcula soma ponderada pelos PESOS.
+
+### Pesos por posição (usados apenas no fallback sem nota_media)
 
 | Métrica | Goleiro | Defensor | Meia | Atacante |
 |---|---|---|---|---|
-| Gols | 0.0 | 0.1 | 0.2 | 0.35 |
-| Assistências | 0.0 | 0.1 | 0.25 | 0.2 |
-| Minutos | 0.3 | 0.2 | 0.2 | 0.2 |
-| Nota média | 0.4 | 0.3 | 0.2 | 0.15 |
-| Passes chave | 0.0 | 0.05 | 0.15 | 0.1 |
-| Desarmes | 0.0 | 0.25 | 0.0 | 0.0 |
-| Defesas (GK) | 0.3 | 0.0 | 0.0 | 0.0 |
+| Gols | 0.0 | 0.15 | 0.25 | 0.40 |
+| Assistências | 0.0 | 0.15 | 0.30 | 0.25 |
+| Minutos | 0.5 | 0.25 | 0.25 | 0.20 |
+| Passes chave | 0.0 | 0.10 | 0.20 | 0.15 |
+| Desarmes | 0.0 | 0.35 | 0.0 | 0.0 |
+| Defesas (GK) | 0.5 | 0.0 | 0.0 | 0.0 |
 
-Score = soma(metrica_normalizada * peso) para cada métrica
+`nota_media` foi removida dos pesos — ela vira o score diretamente quando disponível.
 
 ---
 
@@ -261,3 +264,7 @@ Score = soma(metrica_normalizada * peso) para cada métrica
 - **Frontend do Bruno reutilizado** — abas 1, 2 e 5 são do Bruno; abas 3 e 4 são do Milton
 - **Login feito pelo amigo** — não mexer na auth/usuario.py
 - **Comparativo usa só o banco** — API já captura convocados ao buscar brasileiros nas ligas europeias
+- **Pipeline procedural** — extractor, transformer e loader usam funções simples, sem OOP, alinhado com os laboratórios de preparação e transformação de dados
+- **nota_media vira score diretamente** — quando o rating da API está disponível, ele é usado como score (dividido por 10). Só calcula pelos pesos quando o rating é nulo
+- **Banco salva todas as métricas** — não apenas as usadas no score, para permitir análises futuras sem precisar re-rodar o pipeline
+- **verificar_cota() é utilitário manual** — não é chamada automaticamente pelas DAGs; o próprio calendário semanal garante que o limite de 100 req/dia nunca é estourado
