@@ -1,353 +1,320 @@
 # =============================================================================
 # transformer.py - Transformação e cálculo de score
 # =============================================================================
-# Responsabilidade única: receber a lista bruta do Extractor e devolver
-# uma lista de dicts "limpos" com o score calculado, prontos para o Loader.
+# Funções para limpar, filtrar e calcular o score dos jogadores.
 #
-# Passos internos:
-#   1. _achatar()            → JSON aninhado → dict plano
-#   2. filtrar brasileiros   → nationality == "Brazil"
-#   3. _tratar_nulos()       → None → 0 nas métricas
-#   4. _normalizar_e_calcular() → MinMaxScaler por posição + score ponderado
+# Fluxo:
+#   1. achatar()              → JSON aninhado da API → DataFrame pandas
+#   2. filtrar_brasileiros()  → mantém só nationality == "Brazil"
+#   3. tratar_nulos()         → fillna(0) nas colunas numéricas
+#   4. calcular_scores()      → MinMaxScaler por posição + score ponderado
+#   5. transformar()          → função principal que encadeia os 4 passos
 # =============================================================================
 
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
 
-class Transformer:
+# =============================================================================
+# PESOS POR POSIÇÃO
+# Cada posição valoriza métricas diferentes.
+# A soma dos pesos de cada linha deve ser 1.0.
+# =============================================================================
+
+PESOS = {
+    "Goalkeeper": {
+        "gols":         0.0,
+        "assistencias": 0.0,
+        "minutos":      0.3,
+        "nota_media":   0.4,
+        "passes_chave": 0.0,
+        "desarmes":     0.0,
+        "defesas":      0.3,
+    },
+    "Defender": {
+        "gols":         0.1,
+        "assistencias": 0.1,
+        "minutos":      0.2,
+        "nota_media":   0.3,
+        "passes_chave": 0.05,
+        "desarmes":     0.25,
+        "defesas":      0.0,
+    },
+    "Midfielder": {
+        "gols":         0.2,
+        "assistencias": 0.25,
+        "minutos":      0.2,
+        "nota_media":   0.2,
+        "passes_chave": 0.15,
+        "desarmes":     0.0,
+        "defesas":      0.0,
+    },
+    "Attacker": {
+        "gols":         0.35,
+        "assistencias": 0.2,
+        "minutos":      0.2,
+        "nota_media":   0.15,
+        "passes_chave": 0.1,
+        "desarmes":     0.0,
+        "defesas":      0.0,
+    },
+}
+
+# Colunas que entram no cálculo de score
+METRICAS = ["gols", "assistencias", "minutos", "nota_media",
+            "passes_chave", "desarmes", "defesas"]
+
+
+# =============================================================================
+# PASSO 1 — achatar o JSON aninhado → DataFrame
+# =============================================================================
+
+def achatar(jogadores_brutos: list[dict]) -> pd.DataFrame:
     """
-    Transforma a lista bruta da API em registros prontos para o banco.
+    Converte a lista de dicts aninhados da API em um DataFrame pandas plano.
 
-    Uso:
-        transformer = Transformer(jogadores_brutos, temporada=2024)
-        jogadores   = transformer.transformar()
+    A API retorna cada jogador com a estrutura:
+        { "player": {...}, "statistics": [{...}] }
+
+    Esta função "achata" essa estrutura, extraindo todos os campos
+    relevantes e colocando em colunas do DataFrame.
+
+    Args:
+        jogadores_brutos: Lista de dicts retornada pelo extractor
+
+    Returns:
+        DataFrame com uma linha por jogador e todas as colunas necessárias
     """
+    registros = []
 
-    # -------------------------------------------------------------------------
-    # PESOS POR POSIÇÃO
-    # -------------------------------------------------------------------------
-    # Cada posição valoriza métricas diferentes.
-    # A soma dos pesos de cada posição deve ser 1.0.
-    # -------------------------------------------------------------------------
-    PESOS = {
-        "Goalkeeper": {
-            "gols":         0.0,
-            "assistencias": 0.0,
-            "minutos":      0.3,
-            "nota_media":   0.4,
-            "passes_chave": 0.0,
-            "desarmes":     0.0,
-            "defesas":      0.3,   # saves — métrica exclusiva de goleiros
-        },
-        "Defender": {
-            "gols":         0.1,
-            "assistencias": 0.1,
-            "minutos":      0.2,
-            "nota_media":   0.3,
-            "passes_chave": 0.05,
-            "desarmes":     0.25,
-            "defesas":      0.0,
-        },
-        "Midfielder": {
-            "gols":         0.2,
-            "assistencias": 0.25,
-            "minutos":      0.2,
-            "nota_media":   0.2,
-            "passes_chave": 0.15,
-            "desarmes":     0.0,
-            "defesas":      0.0,
-        },
-        "Attacker": {
-            "gols":         0.35,
-            "assistencias": 0.2,
-            "minutos":      0.2,
-            "nota_media":   0.15,
-            "passes_chave": 0.1,
-            "desarmes":     0.0,
-            "defesas":      0.0,
-        },
-    }
+    for dado in jogadores_brutos:
+        player   = dado.get("player",     {})
+        stats    = dado.get("statistics", [{}])
+        stat     = stats[0] if stats else {}
 
-    # Métricas que entram no cálculo de score (ordem importa para o DataFrame)
-    METRICAS = ["gols", "assistencias", "minutos", "nota_media",
-                "passes_chave", "desarmes", "defesas"]
+        games    = stat.get("games",    {})
+        goals    = stat.get("goals",    {})
+        passes   = stat.get("passes",   {})
+        tackles  = stat.get("tackles",  {})
+        shots    = stat.get("shots",    {})
+        dribbles = stat.get("dribbles", {})
+        cards    = stat.get("cards",    {})
 
-    def __init__(self, jogadores_brutos: list[dict], temporada: int):
-        """
-        Args:
-            jogadores_brutos: Lista retornada pelo Extractor.buscar()
-            temporada:        Temporada no formato YYYY (ex: 2024)
-        """
-        self.jogadores_brutos = jogadores_brutos
-        self.temporada        = temporada
-
-        # Contadores para auditoria
-        self._total_filtrados   = 0
-        self._total_processados = 0
-
-    # -------------------------------------------------------------------------
-    # MÉTODO PRINCIPAL
-    # -------------------------------------------------------------------------
-
-    def transformar(self) -> list[dict]:
-        """
-        Executa o pipeline completo de transformação.
-
-        Returns:
-            Lista de dicts planos com todas as colunas da tabela `jogadores`
-            e o campo `score` preenchido.
-        """
-        print(f"\n⚙️  Iniciando transformação de {len(self.jogadores_brutos)} registros brutos...")
-
-        # Passo 1: achatar o JSON aninhado
-        achatados = [self._achatar(j) for j in self.jogadores_brutos]
-
-        # Passo 2: filtrar apenas jogadores brasileiros
-        brasileiros = [j for j in achatados if j.get("nacionalidade") == "Brazil"]
-        self._total_filtrados = len(brasileiros)
-
-        if not brasileiros:
-            print("⚠️  Nenhum jogador brasileiro encontrado neste lote.")
-            return []
-
-        print(f"🇧🇷  Brasileiros encontrados: {self._total_filtrados}")
-
-        # Passo 3: substituir None por 0 nas métricas
-        for jogador in brasileiros:
-            self._tratar_nulos(jogador)
-
-        # Passo 4: normalizar por posição e calcular score
-        resultado = self._normalizar_e_calcular(brasileiros)
-
-        self._total_processados = len(resultado)
-        print(f"✅ Transformação concluída: {self._total_processados} jogadores prontos.")
-
-        return resultado
-
-    # -------------------------------------------------------------------------
-    # PASSO 1 — achatar o JSON aninhado
-    # -------------------------------------------------------------------------
-
-    def _achatar(self, dado: dict) -> dict:
-        """
-        Converte a estrutura aninhada da API em um dict plano.
-
-        A API retorna cada jogador assim:
-            {
-                "player":     { id, name, nationality, age, ... },
-                "statistics": [ { team, league, games, goals, ... } ]
-            }
-
-        Um jogador pode ter estatísticas em mais de um time (ex: emprestado).
-        Neste caso, pegamos apenas a primeira entrada de `statistics`,
-        que corresponde ao clube principal da temporada.
-
-        Args:
-            dado: Dict bruto da API com "player" e "statistics"
-
-        Returns:
-            Dict plano com todos os campos que vão para o banco
-        """
-        player = dado.get("player", {})
-
-        # Pega a primeira (ou única) estatística do jogador
-        stats = dado.get("statistics", [{}])[0] if dado.get("statistics") else {}
-
-        games   = stats.get("games",   {})
-        goals   = stats.get("goals",   {})
-        passes  = stats.get("passes",  {})
-        tackles = stats.get("tackles", {})
-
-        # O rating vem como string ("6.100000") — precisamos converter para float
+        # O rating vem como string ("6.10") — converte para float
         rating_raw = games.get("rating")
         nota_media = float(rating_raw) if rating_raw else None
 
-        shots   = stats.get("shots",    {})
-        dribbles = stats.get("dribbles", {})
-        cards   = stats.get("cards",    {})
-
-        return {
-            # --- Identificação do jogador ---
+        registros.append({
+            # Identificação
             "api_id":        player.get("id"),
             "nome":          player.get("name"),
             "nacionalidade": player.get("nationality"),
             "idade":         player.get("age"),
-            "altura":        player.get("height"),     # ex: "182 cm"
-            "peso":          player.get("weight"),     # ex: "73 kg"
+            "altura":        player.get("height"),
+            "peso":          player.get("weight"),
             "foto":          player.get("photo"),
-
-            # --- Time e liga ---
-            "time":        stats.get("team", {}).get("name"),
-            "time_id":     stats.get("team", {}).get("id"),
-            "liga_id":     stats.get("league", {}).get("id"),
-            "liga_nome":   stats.get("league", {}).get("name"),
-            "liga_pais":   stats.get("league", {}).get("country"),
-            "temporada":   self.temporada,
-
-            # --- Estatísticas de participação ---
-            "posicao":    games.get("position"),
-            "aparicoes":  games.get("appearences"),
-            "titular":    games.get("lineups"),        # jogos como titular
-            "minutos":    games.get("minutes"),
-            "nota_media": nota_media,
-
-            # --- Gols e assistências ---
-            "gols":        goals.get("total"),
-            "assistencias": goals.get("assists"),
-
-            # --- Chutes ---
-            "chutes_total": shots.get("total"),
-            "chutes_gol":   shots.get("on"),           # chutes no gol
-
-            # --- Passes ---
+            # Time e liga
+            "time":          stat.get("team",   {}).get("name"),
+            "time_id":       stat.get("team",   {}).get("id"),
+            "liga_id":       stat.get("league", {}).get("id"),
+            "liga_nome":     stat.get("league", {}).get("name"),
+            "liga_pais":     stat.get("league", {}).get("country"),
+            # Participação
+            "posicao":       games.get("position"),
+            "aparicoes":     games.get("appearences"),
+            "titular":       games.get("lineups"),
+            "minutos":       games.get("minutes"),
+            "nota_media":    nota_media,
+            # Gols
+            "gols":          goals.get("total"),
+            "assistencias":  goals.get("assists"),
+            "defesas":       goals.get("saves"),    # só para goleiros
+            # Passes
             "passes_total":    passes.get("total"),
             "passes_chave":    passes.get("key"),
-            "precisao_passes": passes.get("accuracy"), # vem como % (ex: 75.0)
-
-            # --- Defesa / Duelos ---
-            "desarmes":      tackles.get("total"),
-            "interceptacoes": tackles.get("interceptions"),
-            "bloqueios":     tackles.get("blocks"),
-
-            # --- Dribles ---
-            "dribles_tent": dribbles.get("attempts"),
-            "dribles_suc":  dribbles.get("success"),
-
-            # --- Métrica exclusiva de goleiros ---
-            # `goals.saves` = defesas realizadas (só vem preenchido para GKs)
-            "defesas": goals.get("saves"),
-
-            # --- Cartões ---
+            "precisao_passes": passes.get("accuracy"),
+            # Defesa
+            "desarmes":        tackles.get("total"),
+            "interceptacoes":  tackles.get("interceptions"),
+            "bloqueios":       tackles.get("blocks"),
+            # Chutes
+            "chutes_total":    shots.get("total"),
+            "chutes_gol":      shots.get("on"),
+            # Dribles
+            "dribles_tent":    dribbles.get("attempts"),
+            "dribles_suc":     dribbles.get("success"),
+            # Cartões
             "cartoes_amarelos":  cards.get("yellow"),
             "cartoes_vermelhos": cards.get("red"),
+        })
 
-            # --- Score (será preenchido no passo 4) ---
-            "score": None,
-        }
+    return pd.DataFrame(registros)
 
-    # -------------------------------------------------------------------------
-    # PASSO 3 — tratar nulos
-    # -------------------------------------------------------------------------
 
-    def _tratar_nulos(self, jogador: dict) -> None:
-        """
-        Substitui None por 0 em todas as métricas numéricas.
-        Modifica o dicionário in-place.
+# =============================================================================
+# PASSO 2 — filtrar apenas jogadores brasileiros
+# =============================================================================
 
-        Por que 0 e não descartar o jogador?
-        Um jogador com 0 gols ainda é um dado válido — ele jogou, só não marcou.
-        Descartar seria perder informação real de quem teve minutos em campo.
+def filtrar_brasileiros(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Mantém apenas os jogadores com nacionalidade "Brazil".
 
-        Args:
-            jogador: Dict plano retornado por _achatar()
-        """
-        for metrica in self.METRICAS:
-            if jogador.get(metrica) is None:
-                jogador[metrica] = 0
+    Args:
+        df: DataFrame com todos os jogadores
 
-        # aparicoes e nota_media também podem chegar como None
-        if jogador.get("aparicoes") is None:
-            jogador["aparicoes"] = 0
-        if jogador.get("nota_media") is None:
-            jogador["nota_media"] = 0.0
+    Returns:
+        DataFrame filtrado com apenas os brasileiros
+    """
+    df_br = df[df["nacionalidade"] == "Brazil"].copy()
+    print(f"🇧🇷  Brasileiros encontrados: {len(df_br)} de {len(df)} jogadores")
+    return df_br
 
-    # -------------------------------------------------------------------------
-    # PASSO 4 — normalizar por posição e calcular score
-    # -------------------------------------------------------------------------
 
-    def _normalizar_e_calcular(self, jogadores: list[dict]) -> list[dict]:
-        """
-        Agrupa os jogadores por posição, normaliza as métricas com
-        MinMaxScaler e calcula o score ponderado para cada um.
+# =============================================================================
+# PASSO 3 — tratar nulos com fillna
+# =============================================================================
 
-        Por que normalizar POR POSIÇÃO?
-        Um goleiro com 0 gols não é inferior a um atacante com 10 —
-        eles jogam papéis diferentes. A comparação deve ser interna:
-        goleiro vs goleiro, atacante vs atacante.
+def tratar_nulos(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Preenche os valores ausentes (NaN) nas colunas numéricas com 0.
 
-        Como funciona o MinMaxScaler?
-        Transforma cada métrica para o intervalo [0, 1]:
-            valor_normalizado = (x - min) / (max - min)
-        O melhor jogador da posição naquela métrica recebe 1.0,
-        o pior recebe 0.0.
+    Por que 0 e não remover?
+    Um jogador com 0 gols ainda tem dados válidos — ele jogou, só não marcou.
+    Remover o registro seria perder informação real de quem teve minutos em campo.
 
-        Args:
-            jogadores: Lista de dicts com métricas sem nulos
+    Args:
+        df: DataFrame com possíveis NaNs nas métricas
 
-        Returns:
-            Lista de dicts com campo "score" preenchido
-        """
-        resultado    = []
-        por_posicao  = {}
-        sem_posicao  = []
+    Returns:
+        DataFrame com as métricas preenchidas
+    """
+    colunas_numericas = METRICAS + [
+        "aparicoes", "titular", "passes_total", "precisao_passes",
+        "interceptacoes", "bloqueios", "chutes_total", "chutes_gol",
+        "dribles_tent", "dribles_suc", "cartoes_amarelos", "cartoes_vermelhos",
+    ]
 
-        # Separa por posição
-        for jogador in jogadores:
-            posicao = jogador.get("posicao")
-            if posicao and posicao in self.PESOS:
-                por_posicao.setdefault(posicao, []).append(jogador)
-            else:
-                # Posição desconhecida ou não mapeada → score 0
-                jogador["score"] = 0.0
-                sem_posicao.append(jogador)
+    for col in colunas_numericas:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
 
-        # Processa cada grupo de posição separadamente
-        for posicao, grupo in por_posicao.items():
-            pesos = self.PESOS[posicao]
+    return df
 
-            if len(grupo) == 1:
-                # Com apenas 1 jogador, MinMaxScaler retorna 0 para todas as
-                # métricas (max == min). Atribuímos 0.5 como valor neutro.
-                grupo[0]["score"] = 0.5
-                resultado.extend(grupo)
-                continue
 
-            # Monta um DataFrame apenas com as métricas de interesse
-            df = pd.DataFrame(grupo)[self.METRICAS].astype(float)
+# =============================================================================
+# PASSO 4 — normalizar por posição e calcular score
+# =============================================================================
 
-            # Normaliza para [0, 1] dentro desta posição
-            scaler = MinMaxScaler()
-            df_norm = pd.DataFrame(
-                scaler.fit_transform(df),
-                columns=self.METRICAS,
-                index=df.index,
-            )
+def calcular_scores(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Agrupa os jogadores por posição, normaliza as métricas com MinMaxScaler
+    e calcula o score ponderado para cada um.
 
-            # Score = soma ponderada das métricas normalizadas
-            for i, jogador in enumerate(grupo):
-                score = sum(
-                    df_norm.loc[i, metrica] * pesos[metrica]
-                    for metrica in self.METRICAS
-                )
-                jogador["score"] = round(score, 4)
+    Por que normalizar POR POSIÇÃO?
+    Um goleiro com 0 gols não é inferior a um atacante com 10 —
+    eles jogam papéis diferentes. Cada jogador deve ser comparado
+    apenas com outros da mesma posição.
 
-            resultado.extend(grupo)
+    MinMaxScaler transforma cada métrica para [0, 1]:
+        valor_normalizado = (x - min) / (max - min)
 
-        # Jogadores sem posição vão ao final
-        resultado.extend(sem_posicao)
-        return resultado
+    Score = soma(métrica_normalizada × peso) para cada métrica da posição.
 
-    # -------------------------------------------------------------------------
-    # PROPRIEDADES DE AUDITORIA
-    # -------------------------------------------------------------------------
+    Args:
+        df: DataFrame com métricas já sem nulos
 
-    @property
-    def total_filtrados(self) -> int:
-        """Total de jogadores brasileiros encontrados neste lote."""
-        return self._total_filtrados
+    Returns:
+        DataFrame com a coluna "score" preenchida
+    """
+    df["score"] = 0.0
+    grupos = []
 
-    @property
-    def total_processados(self) -> int:
-        """Total de jogadores após a transformação completa."""
-        return self._total_processados
+    for posicao, grupo in df.groupby("posicao"):
+        grupo = grupo.copy()
 
-    def __str__(self) -> str:
-        return (
-            f"Transformer(temporada={self.temporada}, "
-            f"filtrados={self._total_filtrados}, "
-            f"processados={self._total_processados})"
+        # Posição não mapeada nos pesos → score 0
+        if posicao not in PESOS:
+            grupos.append(grupo)
+            continue
+
+        # Com apenas 1 jogador, o scaler retorna tudo 0 (max == min)
+        # Atribuímos 0.5 como valor neutro
+        if len(grupo) == 1:
+            grupo["score"] = 0.5
+            grupos.append(grupo)
+            continue
+
+        pesos = PESOS[posicao]
+
+        # Normaliza as métricas deste grupo para [0, 1]
+        scaler     = MinMaxScaler()
+        metricas_df = grupo[METRICAS].astype(float)
+        normalizado = pd.DataFrame(
+            scaler.fit_transform(metricas_df),
+            columns=METRICAS,
+            index=grupo.index,
         )
 
-    def __repr__(self) -> str:
-        return self.__str__()
+        # Score = soma ponderada das métricas normalizadas
+        grupo["score"] = sum(
+            normalizado[metrica] * pesos[metrica]
+            for metrica in METRICAS
+        ).round(4)
+
+        grupos.append(grupo)
+
+    if not grupos:
+        return df
+
+    return pd.concat(grupos).sort_values("score", ascending=False).reset_index(drop=True)
+
+
+# =============================================================================
+# FUNÇÃO PRINCIPAL — encadeia todos os passos
+# =============================================================================
+
+def transformar(jogadores_brutos: list[dict], temporada: int) -> list[dict]:
+    """
+    Executa o pipeline completo de transformação.
+
+    Passos:
+        1. achatar()             → lista de dicts → DataFrame
+        2. filtrar_brasileiros() → mantém só nationality == "Brazil"
+        3. tratar_nulos()        → fillna(0) nas colunas numéricas
+        4. calcular_scores()     → MinMaxScaler por posição + score ponderado
+
+    Args:
+        jogadores_brutos: Lista retornada pela função buscar_jogadores()
+        temporada:        Temporada no formato YYYY (ex: 2025)
+
+    Returns:
+        Lista de dicts prontos para a função salvar_jogadores() do loader
+    """
+    print(f"\n⚙️  Iniciando transformação de {len(jogadores_brutos)} registros brutos...")
+
+    if not jogadores_brutos:
+        print("⚠️  Lista vazia recebida.")
+        return []
+
+    # Passo 1: JSON aninhado → DataFrame
+    df = achatar(jogadores_brutos)
+
+    # Adiciona a temporada como coluna (não vem da API diretamente)
+    df["temporada"] = temporada
+
+    # Passo 2: filtra brasileiros
+    df = filtrar_brasileiros(df)
+    if df.empty:
+        print("⚠️  Nenhum jogador brasileiro encontrado.")
+        return []
+
+    # Passo 3: trata nulos
+    df = tratar_nulos(df)
+
+    # Passo 4: normaliza e calcula score
+    df = calcular_scores(df)
+
+    print(f"✅ Transformação concluída: {len(df)} jogadores processados")
+
+    # Retorna como lista de dicts para o loader
+    return df.to_dict(orient="records")

@@ -1,261 +1,196 @@
 # =============================================================================
 # loader.py - Persistência no PostgreSQL
 # =============================================================================
-# Responsabilidade única: receber a lista de dicts do Transformer e
-# fazer o UPSERT na tabela `jogadores` do banco selecao_brasileira.
-#
-# O que é UPSERT?
-#   INSERT + UPDATE em uma única operação.
-#   Se o jogador já existir na tabela (mesma chave player_id + liga_id + temporada),
-#   os dados são ATUALIZADOS. Se não existir, é INSERIDO.
-#   Isso garante que podemos rodar o pipeline mais de uma vez sem duplicar dados.
-#
-# Tecnologia:
-#   SQLAlchemy Core com PostgreSQL ON CONFLICT DO UPDATE SET
+# Funções para salvar os jogadores transformados no banco de dados.
 # =============================================================================
 
 from datetime import datetime
-
 from sqlalchemy import create_engine, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy import Table, MetaData
+from sqlalchemy import MetaData
 
 
-class Loader:
+# =============================================================================
+# MAPEAMENTO de campos do transformer → colunas do banco
+# =============================================================================
+
+def _mapear(jogador: dict) -> dict:
     """
-    Salva os jogadores transformados no banco PostgreSQL.
+    Converte os nomes dos campos retornados pelo transformer
+    para os nomes exatos das colunas da tabela `jogadores`.
 
-    Uso:
-        loader = Loader(db_url="postgresql://airflow:airflow@localhost:5432/selecao_brasileira")
-        loader.salvar(jogadores)
+    Args:
+        jogador: Dict plano retornado pelo transformer
+
+    Returns:
+        Dict com as chaves no formato das colunas do banco
     """
+    return {
+        "player_id":         jogador.get("api_id"),
+        "nome":              jogador.get("nome"),
+        "nacionalidade":     jogador.get("nacionalidade"),
+        "idade":             jogador.get("idade"),
+        "altura":            jogador.get("altura"),
+        "peso":              jogador.get("peso"),
+        "foto_url":          jogador.get("foto"),
+        "posicao":           jogador.get("posicao"),
+        "time_id":           jogador.get("time_id"),
+        "time_nome":         jogador.get("time"),
+        "liga_id":           jogador.get("liga_id"),
+        "liga_nome":         jogador.get("liga_nome"),
+        "liga_pais":         jogador.get("liga_pais"),
+        "temporada":         jogador.get("temporada"),
+        "partidas":          jogador.get("aparicoes")       or 0,
+        "titular":           jogador.get("titular")         or 0,
+        "minutos":           jogador.get("minutos")         or 0,
+        "nota_media":        jogador.get("nota_media"),
+        "gols":              jogador.get("gols")            or 0,
+        "assistencias":      jogador.get("assistencias")    or 0,
+        "chutes_total":      jogador.get("chutes_total")    or 0,
+        "chutes_gol":        jogador.get("chutes_gol")      or 0,
+        "passes_total":      jogador.get("passes_total")    or 0,
+        "passes_chave":      jogador.get("passes_chave")    or 0,
+        "precisao_passes":   jogador.get("precisao_passes"),
+        "desarmes":          jogador.get("desarmes")        or 0,
+        "interceptacoes":    jogador.get("interceptacoes")  or 0,
+        "bloqueios":         jogador.get("bloqueios")       or 0,
+        "dribles_tent":      jogador.get("dribles_tent")    or 0,
+        "dribles_suc":       jogador.get("dribles_suc")     or 0,
+        "defesas_gk":        jogador.get("defesas")         or 0,
+        "cartoes_amarelos":  jogador.get("cartoes_amarelos")  or 0,
+        "cartoes_vermelhos": jogador.get("cartoes_vermelhos") or 0,
+        "score":             jogador.get("score"),
+        "atualizado_em":     datetime.utcnow(),
+    }
 
-    def __init__(self, db_url: str):
-        """
-        Args:
-            db_url: URL de conexão SQLAlchemy.
-                    Formato: postgresql://usuario:senha@host:porta/banco
-                    Exemplo: postgresql://airflow:airflow@localhost:5432/selecao_brasileira
 
-                    Dentro do container Docker:
-                    postgresql://airflow:airflow@postgres:5432/selecao_brasileira
-        """
-        self.db_url = db_url
-        self.engine = create_engine(db_url)
+# =============================================================================
+# SALVAR JOGADORES (upsert)
+# =============================================================================
 
-        # Contadores para auditoria
-        self._total_inseridos  = 0
-        self._total_atualizados = 0
+def salvar_jogadores(jogadores: list[dict], db_url: str) -> dict:
+    """
+    Faz o UPSERT de todos os jogadores na tabela `jogadores`.
 
-    # -------------------------------------------------------------------------
-    # MÉTODO PRINCIPAL
-    # -------------------------------------------------------------------------
+    O que é UPSERT?
+        INSERT + UPDATE em uma única operação.
+        Se o jogador já existir (mesma chave player_id + liga_id + temporada),
+        os dados são ATUALIZADOS. Se não existir, é INSERIDO.
+        Isso garante que podemos rodar o pipeline mais de uma vez sem duplicar dados.
 
-    def salvar(self, jogadores: list[dict]) -> None:
-        """
-        Faz o UPSERT de todos os jogadores na tabela `jogadores`.
+    Args:
+        jogadores: Lista de dicts retornada por transformar()
+        db_url:    URL de conexão do SQLAlchemy
+                   Ex: "postgresql://airflow:airflow@postgres:5432/selecao_brasileira"
 
-        Para cada jogador:
-          - Se (player_id, liga_id, temporada) NÃO existir → INSERT
-          - Se já existir → UPDATE com os dados mais recentes
+    Returns:
+        Dict com contadores: {"inseridos": int, "atualizados": int}
+    """
+    if not jogadores:
+        print("⚠️  Nenhum jogador para salvar.")
+        return {"inseridos": 0, "atualizados": 0}
 
-        Args:
-            jogadores: Lista de dicts retornada pelo Transformer.transformar()
-        """
-        if not jogadores:
-            print("⚠️  Nenhum jogador para salvar.")
-            return
+    print(f"\n💾 Salvando {len(jogadores)} jogadores no banco...")
 
-        print(f"\n💾 Salvando {len(jogadores)} jogadores no banco...")
+    engine = create_engine(db_url)
 
-        # Converte os dicts do Transformer para o formato das colunas do banco
-        registros = [self._mapear(j) for j in jogadores]
+    # Colunas que identificam o registro — nunca serão alteradas num UPDATE
+    colunas_imutaveis = {"player_id", "liga_id", "temporada"}
 
-        with self.engine.begin() as conn:
-            # Carrega a definição da tabela direto do banco (evita ter que
-            # reescrever todos os tipos de coluna aqui no código)
-            metadata = MetaData()
-            metadata.reflect(bind=conn, only=["jogadores"])
-            tabela = metadata.tables["jogadores"]
+    inseridos  = 0
+    atualizados = 0
 
-            for registro in registros:
-                self._upsert(conn, tabela, registro)
+    with engine.begin() as conn:
+        # Carrega a definição da tabela direto do banco
+        metadata = MetaData()
+        metadata.reflect(bind=conn, only=["jogadores"])
+        tabela = metadata.tables["jogadores"]
 
-        print(f"✅ Banco atualizado: {self._total_inseridos} inseridos | {self._total_atualizados} atualizados")
+        for jogador in jogadores:
+            registro = _mapear(jogador)
 
-    def registrar_log(
-        self,
-        dag_run_id:          str,
-        temporada:           int,
-        ligas_coletadas:     int,
-        jogadores_coletados: int,
-        jogadores_filtrados: int,
-        requisicoes_api:     int,
-        status:              str = "concluido",
-        mensagem:            str = None,
-    ) -> None:
-        """
-        Insere um registro na tabela `pipeline_log` para auditoria.
+            # Colunas que serão atualizadas se o registro já existir
+            colunas_update = {
+                col: registro[col]
+                for col in registro
+                if col not in colunas_imutaveis
+            }
 
-        Chamado pelo final de cada DAG para registrar o que aconteceu
-        naquela execução: quantas requisições, quantos jogadores, etc.
-
-        Args:
-            dag_run_id:          ID do run do Airflow (ti.run_id)
-            temporada:           Temporada coletada (ex: 2024)
-            ligas_coletadas:     Quantas ligas foram processadas
-            jogadores_coletados: Total de registros brutos da API
-            jogadores_filtrados: Total após filtro de brasileiros
-            requisicoes_api:     Total de chamadas à API
-            status:              "concluido" ou "erro"
-            mensagem:            Detalhes de erro, se houver
-        """
-        sql = text("""
-            INSERT INTO pipeline_log (
-                dag_run_id, temporada, ligas_coletadas,
-                jogadores_coletados, jogadores_filtrados,
-                requisicoes_api, status, mensagem, concluido_em
-            ) VALUES (
-                :dag_run_id, :temporada, :ligas_coletadas,
-                :jogadores_coletados, :jogadores_filtrados,
-                :requisicoes_api, :status, :mensagem, :concluido_em
+            stmt = (
+                pg_insert(tabela)
+                .values(registro)
+                .on_conflict_do_update(
+                    constraint="uq_jogador_liga_temporada",
+                    set_=colunas_update,
+                )
             )
-        """)
 
-        with self.engine.begin() as conn:
-            conn.execute(sql, {
-                "dag_run_id":           dag_run_id,
-                "temporada":            temporada,
-                "ligas_coletadas":      ligas_coletadas,
-                "jogadores_coletados":  jogadores_coletados,
-                "jogadores_filtrados":  jogadores_filtrados,
-                "requisicoes_api":      requisicoes_api,
-                "status":               status,
-                "mensagem":             mensagem,
-                "concluido_em":         datetime.utcnow(),
-            })
+            result = conn.execute(stmt)
 
-        print(f"📋 Log registrado: {status} | {jogadores_filtrados} jogadores | {requisicoes_api} requisições")
+            # rowcount == 1 → INSERT | rowcount == 2 → UPDATE (comportamento do PostgreSQL)
+            if result.rowcount == 1:
+                inseridos += 1
+            else:
+                atualizados += 1
 
-    # -------------------------------------------------------------------------
-    # MÉTODOS PRIVADOS
-    # -------------------------------------------------------------------------
+    print(f"✅ Banco atualizado: {inseridos} inseridos | {atualizados} atualizados")
+    return {"inseridos": inseridos, "atualizados": atualizados}
 
-    def _mapear(self, jogador: dict) -> dict:
-        """
-        Converte os nomes dos campos do Transformer para os nomes
-        das colunas da tabela `jogadores`.
 
-        Por que essa camada de mapeamento?
-        Isola o Transformer do banco — se a tabela mudar de nome de coluna,
-        só precisa alterar aqui, não no Transformer.
+# =============================================================================
+# REGISTRAR LOG DE EXECUÇÃO
+# =============================================================================
 
-        Args:
-            jogador: Dict plano retornado pelo Transformer
+def registrar_log(
+    db_url:              str,
+    dag_run_id:          str,
+    temporada:           int,
+    ligas_coletadas:     int,
+    jogadores_coletados: int,
+    jogadores_filtrados: int,
+    requisicoes_api:     int,
+    status:              str = "concluido",
+    mensagem:            str = None,
+) -> None:
+    """
+    Insere um registro na tabela `pipeline_log` para auditoria.
 
-        Returns:
-            Dict com os nomes exatos das colunas do PostgreSQL
-        """
-        return {
-            "player_id":         jogador.get("api_id"),
-            "nome":              jogador.get("nome"),
-            "nacionalidade":     jogador.get("nacionalidade"),
-            "idade":             jogador.get("idade"),
-            "altura":            jogador.get("altura"),
-            "peso":              jogador.get("peso"),
-            "foto_url":          jogador.get("foto"),
-            "posicao":           jogador.get("posicao"),
-            "time_id":           jogador.get("time_id"),
-            "time_nome":         jogador.get("time"),
-            "liga_id":           jogador.get("liga_id"),
-            "liga_nome":         jogador.get("liga_nome"),
-            "liga_pais":         jogador.get("liga_pais"),
-            "temporada":         jogador.get("temporada"),
-            "partidas":          jogador.get("aparicoes")      or 0,
-            "titular":           jogador.get("titular")        or 0,
-            "minutos":           jogador.get("minutos")        or 0,
-            "nota_media":        jogador.get("nota_media"),
-            "gols":              jogador.get("gols")           or 0,
-            "assistencias":      jogador.get("assistencias")   or 0,
-            "chutes_total":      jogador.get("chutes_total")   or 0,
-            "chutes_gol":        jogador.get("chutes_gol")     or 0,
-            "passes_total":      jogador.get("passes_total")   or 0,
-            "passes_chave":      jogador.get("passes_chave")   or 0,
-            "precisao_passes":   jogador.get("precisao_passes"),
-            "desarmes":          jogador.get("desarmes")       or 0,
-            "interceptacoes":    jogador.get("interceptacoes") or 0,
-            "bloqueios":         jogador.get("bloqueios")      or 0,
-            "dribles_tent":      jogador.get("dribles_tent")   or 0,
-            "dribles_suc":       jogador.get("dribles_suc")    or 0,
-            "defesas_gk":        jogador.get("defesas")        or 0,
-            "cartoes_amarelos":  jogador.get("cartoes_amarelos")  or 0,
-            "cartoes_vermelhos": jogador.get("cartoes_vermelhos") or 0,
-            "score":             jogador.get("score"),
-            "atualizado_em":     datetime.utcnow(),
-        }
+    Args:
+        db_url:              URL de conexão SQLAlchemy
+        dag_run_id:          ID do run do Airflow (context["run_id"])
+        temporada:           Temporada coletada
+        ligas_coletadas:     Quantas ligas foram processadas
+        jogadores_coletados: Total de registros brutos da API
+        jogadores_filtrados: Total após filtro de brasileiros
+        requisicoes_api:     Total de chamadas à API
+        status:              "concluido" ou "erro"
+        mensagem:            Detalhes de erro, se houver
+    """
+    engine = create_engine(db_url)
 
-    def _upsert(self, conn, tabela: Table, registro: dict) -> None:
-        """
-        Executa o UPSERT de um único registro.
-
-        Lógica:
-          1. Tenta fazer INSERT
-          2. Se violar a constraint uq_jogador_liga_temporada
-             (player_id + liga_id + temporada já existe),
-             faz UPDATE em todas as colunas exceto player_id, liga_id, temporada
-
-        Args:
-            conn:     Conexão ativa do SQLAlchemy
-            tabela:   Objeto Table refletido do banco
-            registro: Dict com colunas e valores
-        """
-        # Colunas que nunca devem ser alteradas num UPDATE
-        # (são a chave de identificação do registro)
-        colunas_imutaveis = {"player_id", "liga_id", "temporada"}
-
-        # Colunas que serão atualizadas se o registro já existir
-        colunas_update = {
-            col: registro[col]
-            for col in registro
-            if col not in colunas_imutaveis
-        }
-
-        stmt = (
-            pg_insert(tabela)
-            .values(registro)
-            .on_conflict_do_update(
-                constraint="uq_jogador_liga_temporada",
-                set_=colunas_update,
-            )
+    sql = text("""
+        INSERT INTO pipeline_log (
+            dag_run_id, temporada, ligas_coletadas,
+            jogadores_coletados, jogadores_filtrados,
+            requisicoes_api, status, mensagem, concluido_em
+        ) VALUES (
+            :dag_run_id, :temporada, :ligas_coletadas,
+            :jogadores_coletados, :jogadores_filtrados,
+            :requisicoes_api, :status, :mensagem, :concluido_em
         )
+    """)
 
-        result = conn.execute(stmt)
+    with engine.begin() as conn:
+        conn.execute(sql, {
+            "dag_run_id":           dag_run_id,
+            "temporada":            temporada,
+            "ligas_coletadas":      ligas_coletadas,
+            "jogadores_coletados":  jogadores_coletados,
+            "jogadores_filtrados":  jogadores_filtrados,
+            "requisicoes_api":      requisicoes_api,
+            "status":               status,
+            "mensagem":             mensagem,
+            "concluido_em":         datetime.utcnow(),
+        })
 
-        # rowcount = 1 para INSERT, 2 para UPDATE (comportamento do PostgreSQL)
-        if result.rowcount == 1:
-            self._total_inseridos += 1
-        else:
-            self._total_atualizados += 1
-
-    # -------------------------------------------------------------------------
-    # PROPRIEDADES DE AUDITORIA
-    # -------------------------------------------------------------------------
-
-    @property
-    def total_inseridos(self) -> int:
-        """Total de novos jogadores inseridos nesta execução."""
-        return self._total_inseridos
-
-    @property
-    def total_atualizados(self) -> int:
-        """Total de jogadores atualizados (já existiam no banco)."""
-        return self._total_atualizados
-
-    def __str__(self) -> str:
-        return (
-            f"Loader(inseridos={self._total_inseridos}, "
-            f"atualizados={self._total_atualizados})"
-        )
-
-    def __repr__(self) -> str:
-        return self.__str__()
+    print(f"📋 Log registrado: {status} | {jogadores_filtrados} jogadores | {requisicoes_api} req")

@@ -21,9 +21,9 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from pipeline.extractor   import Extractor
-from pipeline.transformer import Transformer
-from pipeline.loader      import Loader
+from pipeline.extractor   import buscar_jogadores
+from pipeline.transformer import transformar
+from pipeline.loader      import salvar_jogadores, registrar_log
 
 
 # -----------------------------------------------------------------------------
@@ -87,16 +87,12 @@ with DAG(
         if not api_key:
             raise ValueError("❌ API_FOOTBALL_KEY não encontrada nas variáveis de ambiente!")
 
-        extractor = Extractor(api_key=api_key, league_id=LIGA_ID, season=TEMPORADA)
-
         print(f"🔑 Chave carregada | Liga: {LIGA_NOME} | Temporada: {TEMPORADA}")
 
-        jogadores_brutos = extractor.buscar()
+        jogadores_brutos = buscar_jogadores(api_key=api_key, league_id=LIGA_ID, season=TEMPORADA)
 
-        # Salva os dados no XCom para a transform_task buscar
         context["ti"].xcom_push(key="jogadores_brutos",    value=jogadores_brutos)
-        context["ti"].xcom_push(key="total_requisicoes",   value=extractor.total_requisicoes)
-        context["ti"].xcom_push(key="total_jogadores_api", value=extractor.total_jogadores)
+        context["ti"].xcom_push(key="total_jogadores_api", value=len(jogadores_brutos))
 
         print(f"📦 XCom guardado: {len(jogadores_brutos)} registros brutos")
 
@@ -125,13 +121,10 @@ with DAG(
 
         print(f"📥 XCom recebido: {len(jogadores_brutos)} registros brutos")
 
-        transformer = Transformer(jogadores_brutos=jogadores_brutos, temporada=TEMPORADA)
-        jogadores_transformados = transformer.transformar()
+        jogadores_transformados = transformar(jogadores_brutos, temporada=TEMPORADA)
 
-        # Salva o resultado para o Loader
         ti.xcom_push(key="jogadores_transformados", value=jogadores_transformados)
-        ti.xcom_push(key="total_filtrados",         value=transformer.total_filtrados)
-        ti.xcom_push(key="total_processados",       value=transformer.total_processados)
+        ti.xcom_push(key="total_processados",       value=len(jogadores_transformados))
 
         print(f"📦 XCom guardado: {len(jogadores_transformados)} registros transformados")
 
@@ -152,34 +145,32 @@ with DAG(
         """
         ti = context["ti"]
 
-        jogadores = ti.xcom_pull(task_ids="transform_task", key="jogadores_transformados")
-        total_requisicoes   = ti.xcom_pull(task_ids="extract_task",   key="total_requisicoes")
+        jogadores           = ti.xcom_pull(task_ids="transform_task", key="jogadores_transformados")
         total_jogadores_api = ti.xcom_pull(task_ids="extract_task",   key="total_jogadores_api")
-        total_filtrados     = ti.xcom_pull(task_ids="transform_task", key="total_filtrados")
+        total_processados   = ti.xcom_pull(task_ids="transform_task", key="total_processados")
 
         if not jogadores:
             raise ValueError("❌ Nenhum dado recebido da transform_task via XCom!")
 
         print(f"📥 XCom recebido: {len(jogadores)} registros prontos para o banco")
 
-        loader = Loader(db_url=DB_URL)
-        loader.salvar(jogadores)
+        contadores = salvar_jogadores(jogadores, DB_URL)
 
-        # Registra a execução para auditoria
-        loader.registrar_log(
+        registrar_log(
+            db_url=              DB_URL,
             dag_run_id=          context["run_id"],
             temporada=           TEMPORADA,
             ligas_coletadas=     1,
             jogadores_coletados= total_jogadores_api,
-            jogadores_filtrados= total_filtrados,
-            requisicoes_api=     total_requisicoes,
+            jogadores_filtrados= total_processados,
+            requisicoes_api=     total_jogadores_api,
             status=              "concluido",
         )
 
         print(
             f"🏁 Pipeline {LIGA_NOME} concluído!\n"
-            f"   Inseridos: {loader.total_inseridos} | "
-            f"   Atualizados: {loader.total_atualizados}"
+            f"   Inseridos: {contadores['inseridos']} | "
+            f"   Atualizados: {contadores['atualizados']}"
         )
 
 
