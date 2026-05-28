@@ -34,6 +34,19 @@ class PosicaoInvalidaError(Exception):
         self.posicao = posicao
 
 
+class IdadeInvalidaError(Exception):
+    """
+    Lançada quando a idade do jogador é inválida.
+    Exemplos: idade negativa, zero ou não numérica.
+    """
+    def __init__(self, idade):
+        super().__init__(
+            f"Idade inválida: '{idade}'. "
+            f"A idade deve ser um número inteiro positivo."
+        )
+        self.idade = idade
+
+
 class MinutosInvalidosError(Exception):
     """
     Lançada quando os minutos jogados são negativos.

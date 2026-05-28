@@ -65,8 +65,11 @@ def JSON_to_DataFrame(jogadores_brutos: list[dict]) -> pd.DataFrame:
     A API retorna cada jogador com a estrutura:
         { "player": {...}, "statistics": [{...}] }
 
-    Esta função "achata" essa estrutura, extraindo todos os campos
-    relevantes e colocando em colunas do DataFrame.
+    Um jogador pode ter MÚLTIPLAS entradas em statistics — uma por clube
+    caso tenha se transferido durante a temporada. Esta função:
+      1. Identifica o clube principal (onde mais jogou, pelo campo minutes)
+      2. Agrega as métricas numéricas somando todos os clubes
+      3. Calcula a nota_media como média ponderada pelas aparições
 
     Args:
         jogadores_brutos: Lista de dicts retornada pelo extractor
@@ -77,21 +80,36 @@ def JSON_to_DataFrame(jogadores_brutos: list[dict]) -> pd.DataFrame:
     registros = []
 
     for dado in jogadores_brutos:
-        player   = dado.get("player",     {})
-        stats    = dado.get("statistics", [{}])
-        stat     = stats[0] if stats else {}
+        player = dado.get("player", {})
+        stats  = dado.get("statistics", [{}]) or [{}]
 
-        games    = stat.get("games",    {})
-        goals    = stat.get("goals",    {})
-        passes   = stat.get("passes",   {})
-        tackles  = stat.get("tackles",  {})
-        shots    = stat.get("shots",    {})
-        dribbles = stat.get("dribbles", {})
-        cards    = stat.get("cards",    {})
+        # Clube principal: entrada com mais minutos jogados
+        stat_principal = max(
+            stats,
+            key=lambda s: s.get("games", {}).get("minutes") or 0
+        )
+        games_p = stat_principal.get("games", {})
 
-        # O rating vem como string ("6.10") — converte para float
-        rating_raw = games.get("rating")
-        nota_media = float(rating_raw) if rating_raw else None
+        # Agrega métricas numéricas somando todos os clubes do jogador
+        def agg(campo: str, subcampo: str):
+            """Soma o subcampo de todos os stats, ignorando nulls."""
+            total, encontrou = 0, False
+            for s in stats:
+                val = s.get(campo, {}).get(subcampo)
+                if val is not None:
+                    total += val
+                    encontrou = True
+            return total if encontrou else None
+
+        # nota_media: média ponderada por aparições entre clubes com rating
+        total_ponderado, total_ap = 0.0, 0
+        for s in stats:
+            rating_raw = s.get("games", {}).get("rating")
+            ap         = s.get("games", {}).get("appearences") or 0
+            if rating_raw and ap > 0:
+                total_ponderado += float(rating_raw) * ap
+                total_ap        += ap
+        nota_media = round(total_ponderado / total_ap, 6) if total_ap > 0 else None
 
         registros.append({
             # Identificação
@@ -102,39 +120,39 @@ def JSON_to_DataFrame(jogadores_brutos: list[dict]) -> pd.DataFrame:
             "altura":        player.get("height"),
             "peso":          player.get("weight"),
             "foto":          player.get("photo"),
-            # Time e liga
-            "time":          stat.get("team",   {}).get("name"),
-            "time_id":       stat.get("team",   {}).get("id"),
-            "liga_id":       stat.get("league", {}).get("id"),
-            "liga_nome":     stat.get("league", {}).get("name"),
-            "liga_pais":     stat.get("league", {}).get("country"),
-            # Participação
-            "posicao":       games.get("position"),
-            "aparicoes":     games.get("appearences"),
-            "titular":       games.get("lineups"),
-            "minutos":       games.get("minutes"),
-            "nota_media":    nota_media,
+            # Time e liga — do clube onde mais jogou
+            "time":      stat_principal.get("team",   {}).get("name"),
+            "time_id":   stat_principal.get("team",   {}).get("id"),
+            "liga_id":   stat_principal.get("league", {}).get("id"),
+            "liga_nome": stat_principal.get("league", {}).get("name"),
+            "liga_pais": stat_principal.get("league", {}).get("country"),
+            # Participação — agregada de todos os clubes
+            "posicao":    games_p.get("position"),
+            "aparicoes":  agg("games",  "appearences"),
+            "titular":    agg("games",  "lineups"),
+            "minutos":    agg("games",  "minutes"),
+            "nota_media": nota_media,
             # Gols
-            "gols":          goals.get("total"),
-            "assistencias":  goals.get("assists"),
-            "defesas":       goals.get("saves"),    # só para goleiros
+            "gols":        agg("goals", "total"),
+            "assistencias": agg("goals", "assists"),
+            "defesas":     agg("goals", "saves"),    # só para goleiros
             # Passes
-            "passes_total":    passes.get("total"),
-            "passes_chave":    passes.get("key"),
-            "precisao_passes": passes.get("accuracy"),
+            "passes_total":    agg("passes",  "total"),
+            "passes_chave":    agg("passes",  "key"),
+            "precisao_passes": agg("passes",  "accuracy"),
             # Defesa
-            "desarmes":        tackles.get("total"),
-            "interceptacoes":  tackles.get("interceptions"),
-            "bloqueios":       tackles.get("blocks"),
+            "desarmes":       agg("tackles", "total"),
+            "interceptacoes": agg("tackles", "interceptions"),
+            "bloqueios":      agg("tackles", "blocks"),
             # Chutes
-            "chutes_total":    shots.get("total"),
-            "chutes_gol":      shots.get("on"),
+            "chutes_total": agg("shots",    "total"),
+            "chutes_gol":   agg("shots",    "on"),
             # Dribles
-            "dribles_tent":    dribbles.get("attempts"),
-            "dribles_suc":     dribbles.get("success"),
+            "dribles_tent": agg("dribbles", "attempts"),
+            "dribles_suc":  agg("dribbles", "success"),
             # Cartões
-            "cartoes_amarelos":  cards.get("yellow"),
-            "cartoes_vermelhos": cards.get("red"),
+            "cartoes_amarelos":  agg("cards", "yellow"),
+            "cartoes_vermelhos": agg("cards", "red"),
         })
 
     return pd.DataFrame(registros)
@@ -270,7 +288,50 @@ def calcular_scores(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =============================================================================
-# FUNÇÃO PRINCIPAL — encadeia todos os passos
+# FUNÇÃO PRINCIPAL FBREF — para dados vindos do scraper
+# =============================================================================
+
+def transformar_fbref(jogadores: list[dict]) -> list[dict]:
+    """
+    Pipeline de transformação para dados do FBref (já planos, sem aninhamento).
+
+    Diferente de transformar(), esta função pula o JSON_to_DataFrame e
+    filtrar_brasileiros (o scraper já entrega dados planos e filtrados).
+
+    Passos:
+        1. Converte lista de dicts → DataFrame
+        2. tratar_nulos()    → fillna(0) nas métricas
+        3. calcular_scores() → MinMaxScaler por posição + score ponderado
+           (todos os jogadores usam o fallback de pesos — FBref não tem nota_media)
+
+    Args:
+        jogadores: Lista de dicts retornada por raspar_todas_ligas()
+
+    Returns:
+        Lista de dicts com coluna "score" preenchida, prontos para o loader
+    """
+    if not jogadores:
+        print("Lista vazia recebida.")
+        return []
+
+    print(f"\nIniciando transformação FBref de {len(jogadores)} jogadores...")
+
+    df = pd.DataFrame(jogadores)
+
+    # Garante que as colunas de métricas existam
+    for col in METRICAS + ["nota_media", "aparicoes", "titular"]:
+        if col not in df.columns:
+            df[col] = None
+
+    df = tratar_nulos(df)
+    df = calcular_scores(df)
+
+    print(f"Transformação concluída: {len(df)} jogadores processados")
+    return df.to_dict(orient="records")
+
+
+# =============================================================================
+# FUNÇÃO PRINCIPAL API — encadeia todos os passos
 # =============================================================================
 
 def transformar(jogadores_brutos: list[dict], temporada: int) -> list[dict]:

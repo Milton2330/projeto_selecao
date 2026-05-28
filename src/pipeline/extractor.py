@@ -12,23 +12,6 @@ import time
 # URL base da API-Football
 BASE_URL = "https://v3.football.api-sports.io"
 
-# na real que dá pra tirar depois essa função pq ela só me mostra as minhas requisições e eu consigo saber isso somente olhando para o dashboard que tem no site
-def verificar_cota(api_key: str) -> dict:
-    """
-    Consulta o endpoint /status para ver quantas requisições restam no dia.
-    Este endpoint é gratuito — não conta na cota diária de 100 requisições.
-    """
-    headers  = {"x-apisports-key": api_key}
-    response = requests.get(f"{BASE_URL}/status", headers=headers)
-
-    if response.status_code == 200:
-        info = response.json()["response"]["requests"]
-        print(f"Requisições hoje: {info['current']}/{info['limit_day']}")
-        return info
-
-    print(f"Erro ao verificar cota: {response.status_code}")
-    return {}
-
 
 def _buscar_pagina(api_key: str, league_id: int, season: int, pagina: int) -> dict | None:
     """

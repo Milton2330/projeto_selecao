@@ -24,7 +24,7 @@ from pipeline.loader      import salvar_jogadores, registrar_log
 
 LIGA_ID   = 75
 LIGA_NOME = "Série C"
-TEMPORADA = 2025
+TEMPORADA = 2024
 
 DB_URL = "postgresql://airflow:airflow@postgres:5432/selecao_brasileira"
 

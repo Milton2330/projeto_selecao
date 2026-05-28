@@ -29,7 +29,7 @@ from domain.jogador  import Jogador
 from domain.selecao  import Selecao
 
 
-TEMPORADA = 2025
+TEMPORADA = 2024
 DB_URL    = "postgresql://airflow:airflow@postgres:5432/selecao_brasileira"
 
 # Mínimo de minutos jogados para um jogador entrar na seleção
